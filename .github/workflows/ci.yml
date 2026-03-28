@@ -7,10 +7,10 @@ name: Test
 
 on:
   push:
-    branches: [main, master, develop, 'v*']
+    branches: [main, master, develop, 'dev/*', 'v*']
     tags: ['v*']
   pull_request:
-    branches: [main, master]
+    branches: [main, master, develop]
 
   # 允许手动触发
   workflow_dispatch:
