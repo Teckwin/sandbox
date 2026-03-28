@@ -160,6 +160,8 @@ where
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+
+    #[cfg(unix)]
     use std::os::unix::ffi::OsStrExt;
 
     #[test]
