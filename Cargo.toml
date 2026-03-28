@@ -1,0 +1,57 @@
+[package]
+name = "ai-sandbox"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["AI Sandbox Team"]
+description = "Cross-platform AI tool sandbox security implementation"
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+anyhow = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+multimap = "0.9"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+url = "2.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+which = "1.0"
+url = "2.0"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Windows sandbox dependencies
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+] }
+
+[dev-dependencies]
+pretty_assertions = "1.4"
+
+[[example]]
+name = "demo"
+path = "examples/demo.rs"
+
+[lib]
+name = "ai_sandbox"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sandbox-exec"
+path = "src/bin/sandbox-exec.rs"
+
+[features]
+default = []
+process-hardening = []
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

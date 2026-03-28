@@ -1,0 +1,54 @@
+# Rust
+
+# Build artifacts
+/target/
+**/target/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts
+*.rlib
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+
+# Generated documentation
+doc/
+
+# Debug builds
+debug/
+release/
+*.pdb
+
+# Test outputs
+tests/*/deps/
+tests/*/examples/
+
+# Temporary files
+*.tmp
+*.bak
+*.orig
+*.rej
+
+# Coverage
+*.profraw
+*.profdata
+coverage/
+
+# Environment
+.env
+.env.local
+
+# Misc
+*.log
+
+# Project specific
+.intent-engine/
