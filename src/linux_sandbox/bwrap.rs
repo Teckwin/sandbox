@@ -2,6 +2,9 @@
 //!
 //! Provides integration with bubblewrap (bwrap) for Linux process sandboxing.
 
+#[cfg(target_os = "linux")]
+use which::which;
+
 use std::path::{Path, PathBuf};
 
 /// Bubblewrap executable finder
