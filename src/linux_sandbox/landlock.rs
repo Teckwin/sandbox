@@ -158,11 +158,10 @@ pub fn create_linux_sandbox_command_args(
                 args.push("/".to_string());
             }
         }
-        SandboxPolicy::DangerFullAccess => {
-            if use_landlock {
-                args.push("--no-sandbox".to_string());
-            }
+        SandboxPolicy::DangerFullAccess if use_landlock => {
+            args.push("--no-sandbox".to_string());
         }
+        SandboxPolicy::DangerFullAccess => {}
         _ => {}
     }
 
