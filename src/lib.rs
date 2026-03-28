@@ -59,7 +59,9 @@ pub use sandboxing::{
 pub use process_hardening::pre_main_hardening;
 
 // 执行策略
-pub use execpolicy::{parse_policy, Decision, NetworkRule, Policy, PrefixRule, RuleMatch};
+pub use execpolicy::{
+    parse_policy, Decision, NetworkRule, Policy, PrefixRule, RuleMatch, RuleType,
+};
 
 // ============================================================================
 // Extended API - 高级用户可能需要的接口

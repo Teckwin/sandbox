@@ -81,6 +81,11 @@ jobs:
         env:
           RUST_BACKTRACE: 1
 
+      - name: Run functional tests
+        run: cargo run --example functional_test
+        env:
+          RUST_BACKTRACE: 1
+
       - name: Run doc tests
         run: cargo test --doc --verbose
 
@@ -133,7 +138,12 @@ jobs:
           echo "Running tests for ${{ matrix.target }}"
           cargo test --verbose
 
-      - name: Test example
+      - name: Run functional tests
+        run: |
+          echo "Running functional tests for ${{ matrix.target }}"
+          cargo run --example functional_test
+
+      - name: Test demo example
         run: cargo run --example demo -- 2>/dev/null || echo "Demo may require platform-specific setup"
 
   # Test on minimum Rust version

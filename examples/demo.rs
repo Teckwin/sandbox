@@ -119,6 +119,58 @@ fn main() {
     }
     println!();
 
+    // 4b. Using default dangerous command blacklist
+    println!("4b. Default Dangerous Command Blacklist:");
+    let default_policy = Policy::new_with_defaults();
+
+    let dangerous_commands = vec![
+        vec!["git".to_string(), "restore".to_string()],
+        vec!["git".to_string(), "rm".to_string()],
+        vec!["rm".to_string(), "-rf".to_string()],
+        vec![
+            "dd".to_string(),
+            "if=/dev/zero".to_string(),
+            "of=/dev/sda".to_string(),
+        ],
+    ];
+
+    for cmd in dangerous_commands {
+        let result = default_policy.check(&cmd);
+        match result {
+            Some(m) => {
+                println!("   {:?} -> {:?}", cmd, m.decision);
+                if let Some(justification) = &m.justification {
+                    println!("      Reason: {}", justification);
+                }
+            }
+            None => {
+                println!("   {:?} -> Allowed (no matching rule)", cmd);
+            }
+        }
+    }
+    println!();
+
+    // 4c. Whitelist mode
+    println!("4c. Whitelist Mode:");
+    let mut whitelist_policy = Policy::new_whitelist();
+    let _ = whitelist_policy.add_prefix_rule(&["ls".to_string()], Decision::Allow, None);
+    let _ = whitelist_policy.add_prefix_rule(&["cat".to_string()], Decision::Allow, None);
+
+    let whitelist_tests = vec![
+        vec!["ls".to_string()],
+        vec!["cat".to_string(), "file.txt".to_string()],
+        vec!["rm".to_string()],
+    ];
+
+    for cmd in whitelist_tests {
+        let result = whitelist_policy.check(&cmd);
+        match result {
+            Some(m) => println!("   {:?} -> {:?}", cmd, m.decision),
+            None => println!("   {:?} -> Allowed", cmd),
+        }
+    }
+    println!();
+
     // 5. Get allowed prefixes
     println!("5. Allowed Command Prefixes:");
     let prefixes = exec_policy.get_allowed_prefixes();
