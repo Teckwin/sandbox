@@ -65,18 +65,6 @@ pub use execpolicy::{parse_policy, Decision, NetworkRule, Policy, PrefixRule, Ru
 // Extended API - 高级用户可能需要的接口
 // ============================================================================
 
-// Linux 特定功能
-#[cfg(target_os = "linux")]
-pub use linux_sandbox::{
-    create_linux_sandbox_command_args_for_policies, execute_with_capsicum, execute_with_pledge,
-    find_system_bwrap_in_path, get_landlock_version, is_landlock_available, system_bwrap_warning,
-    CapsicumLevel, PledgePromises,
-};
-
-// ============================================================================
-// Extended API - 高级用户可能需要的接口
-// ============================================================================
-
 // Linux 特定功能 - 所有平台都可调用，非 Linux 返回默认值
 #[allow(unused_imports)]
 pub use linux_sandbox::{
