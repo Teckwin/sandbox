@@ -156,12 +156,10 @@ where
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::ffi::OsStr;
-
-    #[cfg(unix)]
     use std::os::unix::ffi::OsStrExt;
 
     #[test]
