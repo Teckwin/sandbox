@@ -80,6 +80,7 @@ pub use windows_sandbox::{
 };
 
 #[cfg(test)]
+#[allow(unused_imports)]
 mod tests {
     use crate::{get_platform_sandbox, SandboxCommand, SandboxManager, SandboxPolicy, SandboxType};
     use std::collections::HashMap;
