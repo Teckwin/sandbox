@@ -47,9 +47,12 @@ pub fn is_windows_sandbox_available() -> bool {
     #[cfg(target_os = "windows")]
     {
         // Check Windows version (Windows 10 1709+ required)
-        let version =
-            std::os::windows::ffi::OsStrExt::to_string(std::env::const_os_str::const_os_str!("OS"));
-        version.contains("10.0.16299") || version.contains("10.0.17134")
+        // Use std::env::var("OS") instead of const_os_str which is unstable
+        if let Ok(os_value) = std::env::var("OS") {
+            os_value.contains("10.0.16299") || os_value.contains("10.0.17134")
+        } else {
+            false
+        }
     }
     #[cfg(not(target_os = "windows"))]
     {
