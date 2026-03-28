@@ -138,17 +138,17 @@ jobs:
 
   # Test on minimum Rust version
   minimum-version:
-    name: Minimum Version (1.80)
+    name: Minimum Version (1.82)
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Rust 1.80
+      - name: Install Rust 1.82
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.80.0
+          toolchain: 1.82.0
 
       - name: Check compilation
         run: cargo check --verbose
