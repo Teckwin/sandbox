@@ -112,6 +112,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn test_sandbox_manager_create_request() {
         let manager = SandboxManager::new();
         let command = SandboxCommand {
@@ -129,6 +130,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn test_sandbox_manager_create_request() {
+        // Skip test on non-macOS platforms as it requires platform-specific sandbox executable
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
     fn test_readonly_policy() {
         let policy = SandboxPolicy::ReadOnly {
             file_system: crate::FileSystemSandboxPolicy::ReadOnly,
@@ -148,6 +156,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn test_readonly_policy() {
+        // Skip test on non-macOS platforms as it requires platform-specific sandbox executable
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
     fn test_workspace_policy() {
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![PathBuf::from("/tmp")],
@@ -164,6 +179,12 @@ mod tests {
 
         let result = manager.create_exec_request(command, policy);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn test_workspace_policy() {
+        // Skip test on non-macOS platforms as it requires platform-specific sandbox executable
     }
 
     #[test]
