@@ -131,9 +131,10 @@ pub fn create_seatbelt_policy(policy: &super::SandboxPolicy) -> String {
         }
         super::SandboxPolicy::ExternalSandbox { network_access } => {
             let mut sbpl = String::from("(version 1)\n");
-            if matches!(network_access, super::NetworkSandboxPolicy::NoAccess) {
-                sbpl.push_str("(deny network*)\n");
-            }
+            sbpl.push_str(match network_access {
+                super::NetworkSandboxPolicy::NoAccess => "(deny network*)\n",
+                _ => "",
+            });
             sbpl
         }
         super::SandboxPolicy::WorkspaceWrite {
