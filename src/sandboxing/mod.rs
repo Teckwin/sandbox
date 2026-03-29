@@ -9,6 +9,7 @@ pub mod seatbelt;
 pub use seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 
 use std::collections::HashMap;
+#[allow(unused_imports)]
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
