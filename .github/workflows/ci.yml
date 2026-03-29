@@ -131,8 +131,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Clean cargo build (Windows)
+        if: runner.os == 'Windows'
+        run: cargo clean
+
       - name: Build with specific features
         run: cargo build --verbose ${{ matrix.features }}
+        env:
+          CARGO_INCREMENTAL: 0
 
       - name: Run platform tests
         run: |
