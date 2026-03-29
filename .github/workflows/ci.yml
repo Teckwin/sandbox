@@ -144,7 +144,12 @@ jobs:
           cargo run --example functional_test
 
       - name: Test demo example
-        run: cargo run --example demo -- 2>/dev/null || echo "Demo may require platform-specific setup"
+        run: |
+          if [ "${{ matrix.target }}" = "windows" ]; then
+            cargo run --example demo -- 2>$NULL || echo "Demo may require platform-specific setup"
+          else
+            cargo run --example demo -- 2>/dev/null || echo "Demo may require platform-specific setup"
+          fi
 
   # Test on minimum Rust version
   minimum-version:
