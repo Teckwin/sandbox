@@ -82,13 +82,27 @@ pub use windows_sandbox::{
 };
 
 #[cfg(test)]
-#[allow(unused_imports)]
 mod tests {
     use crate::{get_platform_sandbox, SandboxCommand, SandboxManager, SandboxPolicy, SandboxType};
     use std::collections::HashMap;
     #[cfg(target_os = "macos")]
     use std::ffi::OsString;
     use std::path::PathBuf;
+
+    // Helper function to create OsString - only available on macOS
+    #[cfg(target_os = "macos")]
+    #[allow(dead_code)]
+    fn make_osstring(s: &str) -> OsString {
+        OsString::from(s)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[allow(dead_code)]
+    fn make_osstring(_s: &str) -> std::ffi::OsString {
+        // On non-macOS, we don't actually use this function
+        // Return a dummy value to satisfy the compiler
+        std::ffi::OsString::new()
+    }
 
     #[test]
     fn test_platform_detection() {
