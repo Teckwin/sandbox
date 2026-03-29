@@ -17,8 +17,8 @@ use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_SUCCESS, H
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Security::{
     AdjustTokenPrivileges, CopySid, CreateRestrictedToken, CreateWellKnownSid, GetLengthSid,
-    GetTokenInformation, LookupPrivilegeValueW, SetTokenInformation, TokenDefaultDacl,
-    ACL, SID_AND_ATTRIBUTES, TOKEN_ADJUST_DEFAULT, TOKEN_ADJUST_PRIVILEGES, TOKEN_ADJUST_SESSIONID,
+    GetTokenInformation, LookupPrivilegeValueW, SetTokenInformation, TokenDefaultDacl, ACL,
+    SID_AND_ATTRIBUTES, TOKEN_ADJUST_DEFAULT, TOKEN_ADJUST_PRIVILEGES, TOKEN_ADJUST_SESSIONID,
     TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_PRIVILEGES, TOKEN_QUERY,
 };
 

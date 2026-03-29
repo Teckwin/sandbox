@@ -12,9 +12,7 @@ use std::ffi::c_void;
 use std::path::Path;
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
-};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Security::CreateWellKnownSid;
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL,
@@ -24,8 +22,8 @@ use windows_sys::Win32::System::Console::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CreateProcessAsUserW, CREATE_UNICODE_ENVIRONMENT, GetCurrentProcess, OpenProcessToken, PROCESS_INFORMATION,
-    STARTF_USESTDHANDLES, STARTUPINFOW,
+    CreateProcessAsUserW, GetCurrentProcess, OpenProcessToken, CREATE_UNICODE_ENVIRONMENT,
+    PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
 };
 
 /// Result of spawning a process with pipes
@@ -97,7 +95,7 @@ pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
 unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<(), String> {
     for kind in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
         let h = GetStdHandle(kind);
-        if h == 0 || h == INVALID_HANDLE_VALUE {
+        if h.is_null() || h == INVALID_HANDLE_VALUE {
             return Err(format!("GetStdHandle failed: {}", GetLastError()));
         }
         if windows_sys::Win32::Foundation::SetHandleInformation(h, 0x00000001, 0x00000001) == 0 {
@@ -178,7 +176,7 @@ pub unsafe fn create_process_as_user(
     }
 
     // Close thread handle - we don't need it
-    if pi.hThread != 0 {
+    if !pi.hThread.is_null() {
         let _ = CloseHandle(pi.hThread);
     }
 

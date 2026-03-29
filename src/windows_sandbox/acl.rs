@@ -9,13 +9,15 @@
 use std::ffi::c_void;
 use std::path::Path;
 
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE, LocalFree};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, LocalFree, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE,
+};
 use windows_sys::Win32::Security::Authorization::{
     GetNamedSecurityInfoW, GetSecurityInfo, SetEntriesInAclW, SetNamedSecurityInfoW,
     SetSecurityInfo, EXPLICIT_ACCESS_W, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
-    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, GENERIC_MAPPING, MapGenericMask,
+    MapGenericMask, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, GENERIC_MAPPING,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
@@ -23,7 +25,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     READ_CONTROL,
 };
 
-const SE_KERNEL_OBJECT: u32 = 6;
+const SE_FILE_OBJECT: i32 = 1;
 const GENERIC_WRITE_MASK: u32 = 0x4000_0000;
 const DENY_ACCESS: i32 = 3;
 
@@ -53,7 +55,7 @@ pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void), 
     let mut p_dacl: *mut ACL = std::ptr::null_mut();
     let code = GetSecurityInfo(
         h,
-        SE_KERNEL_OBJECT as i32,
+        SE_FILE_OBJECT,
         DACL_SECURITY_INFORMATION,
         std::ptr::null_mut(),
         std::ptr::null_mut(),
@@ -213,14 +215,14 @@ pub unsafe fn allow_null_device(psid: *mut c_void) -> Result<(), String> {
         0x80, // FILE_ATTRIBUTE_NORMAL
         0,
     );
-    if h == 0 || h == INVALID_HANDLE_VALUE {
+    if h.is_null() || h == INVALID_HANDLE_VALUE {
         return Ok(()); // Silently fail - null device might not exist in all contexts
     }
     let mut p_sd: *mut c_void = std::ptr::null_mut();
     let mut p_dacl: *mut ACL = std::ptr::null_mut();
     let code = GetSecurityInfo(
         h,
-        SE_KERNEL_OBJECT as i32,
+        SE_FILE_OBJECT,
         DACL_SECURITY_INFORMATION,
         std::ptr::null_mut(),
         std::ptr::null_mut(),
@@ -247,7 +249,7 @@ pub unsafe fn allow_null_device(psid: *mut c_void) -> Result<(), String> {
         if code2 == ERROR_SUCCESS {
             let _ = SetSecurityInfo(
                 h,
-                SE_KERNEL_OBJECT as i32,
+                SE_FILE_OBJECT,
                 DACL_SECURITY_INFORMATION,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
