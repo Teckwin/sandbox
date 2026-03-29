@@ -143,13 +143,17 @@ jobs:
           echo "Running functional tests for ${{ matrix.target }}"
           cargo run --example functional_test
 
-      - name: Test demo example
+      - name: Test demo example (Unix)
+        if: runner.os != 'Windows'
         run: |
-          if ("${{ matrix.target }}" -eq "windows") {
-            cargo run --example demo -- 2>$null 2>$null
-          } else {
-            cargo run --example demo -- 2>/dev/null
-          } || echo "Demo may require platform-specific setup"
+          echo "Testing demo example (Unix)"
+          cargo run --example demo -- 2>/dev/null || echo "Demo may require platform-specific setup"
+
+      - name: Test demo example (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          echo "Testing demo example (Windows)"
+          cargo run --example demo -- 2>$null 2>$null || echo "Demo may require platform-specific setup"
 
   # Test on minimum Rust version
   minimum-version:
