@@ -91,7 +91,13 @@ mod tests {
 
     #[test]
     fn test_platform_detection() {
+        // On Windows, sandbox requires windows_sandbox_enabled = true
+        // Use true to ensure test passes on all platforms
+        #[cfg(target_os = "windows")]
+        let sandbox = get_platform_sandbox(true);
+        #[cfg(not(target_os = "windows"))]
         let sandbox = get_platform_sandbox(false);
+
         #[cfg(any(
             target_os = "linux",
             target_os = "macos",
