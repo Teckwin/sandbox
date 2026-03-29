@@ -86,6 +86,7 @@ pub use windows_sandbox::{
 mod tests {
     use crate::{get_platform_sandbox, SandboxCommand, SandboxManager, SandboxPolicy, SandboxType};
     use std::collections::HashMap;
+    #[cfg(target_os = "macos")]
     use std::ffi::OsString;
     use std::path::PathBuf;
 
