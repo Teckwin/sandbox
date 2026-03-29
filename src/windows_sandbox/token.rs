@@ -318,7 +318,7 @@ mod tests {
             let token = create_readonly_token();
             assert!(token.is_ok());
             let token = token.unwrap();
-            assert!(token != 0);
+            assert!(!token.is_null());
             let result = close_token(token);
             assert!(result.is_ok());
         }

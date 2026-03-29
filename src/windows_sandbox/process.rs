@@ -120,7 +120,7 @@ pub unsafe fn create_process_as_user(
     argv: &[String],
     cwd: &Path,
     env_map: &HashMap<String, String>,
-    logs_base_dir: Option<&Path>,
+    _logs_base_dir: Option<&Path>,
     stdio: Option<(HANDLE, HANDLE, HANDLE)>,
     _use_private_desktop: bool,
 ) -> Result<PROCESS_INFORMATION, String> {
@@ -129,7 +129,7 @@ pub unsafe fn create_process_as_user(
         .map(|a| quote_windows_arg(a))
         .collect::<Vec<_>>()
         .join(" ");
-    let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
+    let cmdline: Vec<u16> = to_wide(&cmdline_str);
     let env_block = make_env_block(env_map);
 
     let mut si: STARTUPINFOW = std::mem::zeroed();
@@ -286,7 +286,7 @@ pub unsafe fn spawn_process_with_pipes(
 /// Get the current user token for restriction
 pub fn get_current_user_token() -> Result<HANDLE, String> {
     unsafe {
-        let mut token: HANDLE = 0;
+        let mut token: HANDLE = std::ptr::null_mut();
         let ok = OpenProcessToken(
             GetCurrentProcess(),
             0x1F, // TOKEN_ALL_ACCESS (0xF) | TOKEN_ADJUST_SESSIONID (0x10)

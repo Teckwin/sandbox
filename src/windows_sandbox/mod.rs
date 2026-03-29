@@ -211,7 +211,7 @@ mod windows_impl {
         args: &[String],
         cwd: &Path,
         env: &HashMap<String, String>,
-        policy: &WindowsSandboxPolicy,
+        _policy: &WindowsSandboxPolicy,
         timeout_ms: Option<u64>,
     ) -> io::Result<SandboxExecutionResult> {
         use std::process::{Command, Stdio};
