@@ -186,7 +186,7 @@ unsafe fn get_logon_sid_bytes(token: HANDLE) -> Result<Vec<u8>, String> {
 /// Enable a single privilege in the token
 #[cfg(target_os = "windows")]
 unsafe fn enable_single_privilege(token: HANDLE, name: &str) -> Result<(), String> {
-    let mut luid = windows_sys::Win32::Foundation::LUID::default();
+    let mut luid: windows_sys::Win32::Foundation::LUID = std::mem::zeroed();
     let wide_name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
     if LookupPrivilegeValueW(ptr::null(), wide_name.as_ptr(), &mut luid) == 0 {
         return Err(format!("LookupPrivilegeValueW failed: {}", GetLastError()));
