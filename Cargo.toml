@@ -35,7 +35,7 @@ windows = { version = "0.58", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Pipes",
 ] }
-windows-sys = { version = "0.52", features = [
+windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
@@ -43,7 +43,6 @@ windows-sys = { version = "0.52", features = [
     "Win32_System_Console",
     "Win32_Storage_FileSystem",
     "Win32_System_Pipes",
-    "Win32_System_SystemServices",
 ] }
 
 [features]
