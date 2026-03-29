@@ -9,10 +9,10 @@
 use std::ffi::c_void;
 use std::path::Path;
 
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     GetNamedSecurityInfoW, GetSecurityInfo, SetEntriesInAclW, SetNamedSecurityInfoW,
-    SetSecurityInfo, EXPLICIT_ACCESS_W, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    SetSecurityInfo, EXPLICIT_ACCESS_W, MapGenericMask, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, GENERIC_MAPPING,

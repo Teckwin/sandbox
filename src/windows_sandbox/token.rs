@@ -17,7 +17,7 @@ use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_SUCCESS, H
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Security::{
     AdjustTokenPrivileges, CopySid, CreateRestrictedToken, CreateWellKnownSid, GetLengthSid,
-    GetTokenInformation, LookupPrivilegeValueW, SetTokenInformation, TokenDefaultDacl, TokenGroups,
+    GetTokenInformation, LookupPrivilegeValueW, SetTokenInformation, TokenDefaultDacl,
     ACL, SID_AND_ATTRIBUTES, TOKEN_ADJUST_DEFAULT, TOKEN_ADJUST_PRIVILEGES, TOKEN_ADJUST_SESSIONID,
     TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_PRIVILEGES, TOKEN_QUERY,
 };
@@ -143,6 +143,8 @@ fn world_sid() -> Result<Vec<u8>, String> {
 /// Get the logon SID from the current token
 #[cfg(target_os = "windows")]
 unsafe fn get_logon_sid_bytes(token: HANDLE) -> Result<Vec<u8>, String> {
+    // TokenGroups is 0x5 in windows-sys
+    const TokenGroups: u32 = 5;
     let mut size: u32 = 0;
     let res = GetTokenInformation(token, TokenGroups, ptr::null_mut(), 0, &mut size);
     if res != 0 || size == 0 {
@@ -163,9 +165,11 @@ unsafe fn get_logon_sid_bytes(token: HANDLE) -> Result<Vec<u8>, String> {
     if res == 0 {
         return Err(format!("GetTokenInformation failed: {}", GetLastError()));
     }
-    let groups = &*(data.as_ptr() as *const TokenGroups);
-    for i in 0..groups.GroupCount {
-        let sid_attr = *groups.Groups.add(i as usize);
+    // TokenGroups structure: first u32 is GroupCount, followed by SID_AND_ATTRIBUTES array
+    let group_count = *(data.as_ptr() as *const u32);
+    let groups_ptr = data.as_ptr().add(std::mem::size_of::<u32>()) as *const SID_AND_ATTRIBUTES;
+    for i in 0..group_count {
+        let sid_attr = *groups_ptr.add(i as usize);
         if (sid_attr.Attributes & SE_GROUP_LOGON_ID) != 0 {
             let sid_len = GetLengthSid(sid_attr.Sid) as usize;
             let mut logon_sid = vec![0u8; sid_len];

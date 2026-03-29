@@ -12,7 +12,9 @@ use std::ffi::c_void;
 use std::path::Path;
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GetCurrentProcess, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+};
 use windows_sys::Win32::Security::CreateWellKnownSid;
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL,
@@ -23,7 +25,7 @@ use windows_sys::Win32::System::Console::{
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
     CreateProcessAsUserW, CREATE_UNICODE_ENVIRONMENT, OpenProcessToken, PROCESS_INFORMATION,
-    STARTF_USESTDHANDLES, STARTUPINFOW, TOKEN_ADJUST_SESSIONID, TOKEN_QUERY,
+    STARTF_USESTDHANDLES, STARTUPINFOW,
 };
 
 /// Result of spawning a process with pipes
@@ -289,8 +291,7 @@ pub fn get_current_user_token() -> Result<HANDLE, String> {
         let mut token: HANDLE = 0;
         let ok = OpenProcessToken(
             GetCurrentProcess(),
-            0xF | // TOKEN_ALL_ACCESS
-                TOKEN_ADJUST_SESSIONID,
+            0x1F, // TOKEN_ALL_ACCESS (0xF) | TOKEN_ADJUST_SESSIONID (0x10)
             &mut token,
         );
         if ok == 0 {
