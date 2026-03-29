@@ -186,7 +186,7 @@ mod windows_impl {
     pub unsafe fn execute_with_restricted_token(
         program: &str,
         args: &[String],
-        _policy: &WindowsSandboxPolicy,
+        policy: &WindowsSandboxPolicy,
     ) -> io::Result<std::process::Child> {
         // Create a restricted token for sandboxed execution
         let token = match create_readonly_token() {
@@ -199,6 +199,7 @@ mod windows_impl {
 
         // For now, use standard Command as fallback
         // Full implementation would use CreateProcessAsUserW with the restricted token
+        let _ = policy;
         let _ = token;
         let _ = close_token(token);
 
@@ -211,12 +212,29 @@ mod windows_impl {
         args: &[String],
         cwd: &Path,
         env: &HashMap<String, String>,
-        _policy: &WindowsSandboxPolicy,
+        policy: &WindowsSandboxPolicy,
         timeout_ms: Option<u64>,
     ) -> io::Result<SandboxExecutionResult> {
         use std::process::{Command, Stdio};
         use std::time::Duration;
 
+        // Get sandbox level from policy
+        let sandbox_level = get_sandbox_level(policy);
+
+        // If policy indicates we need sandboxing, use the restricted token path
+        if sandbox_level != WindowsSandboxLevel::Disabled {
+            // Use the restricted token execution path
+            return Self::execute_with_restricted_token(
+                program,
+                args,
+                cwd,
+                env,
+                policy,
+                timeout_ms,
+            );
+        }
+
+        // Fallback to standard Command for disabled sandbox
         let mut cmd = Command::new(program);
         cmd.args(args);
         cmd.current_dir(cwd);
@@ -462,5 +480,78 @@ mod tests {
             get_sandbox_level(&strict_policy),
             WindowsSandboxLevel::Strict
         );
+    }
+
+    #[test]
+    fn test_policy_to_sandbox_level_mapping() {
+        // Test Disabled: network allowed, no write restrictions
+        let policy_disabled = WindowsSandboxPolicy {
+            read_allow: vec![],
+            write_deny: vec![],
+            network_allowed: true,
+            use_private_desktop: false,
+        };
+        assert_eq!(
+            get_sandbox_level(&policy_disabled),
+            WindowsSandboxLevel::Disabled
+        );
+
+        // Test Basic: network allowed, but has write restrictions
+        let policy_basic = WindowsSandboxPolicy {
+            read_allow: vec![],
+            write_deny: vec![PathBuf::from("/tmp")],
+            network_allowed: true,
+            use_private_desktop: false,
+        };
+        assert_eq!(
+            get_sandbox_level(&policy_basic),
+            WindowsSandboxLevel::Basic
+        );
+
+        // Test Strict: network denied
+        let policy_strict = WindowsSandboxPolicy {
+            read_allow: vec![],
+            write_deny: vec![],
+            network_allowed: false,
+            use_private_desktop: true,
+        };
+        assert_eq!(
+            get_sandbox_level(&policy_strict),
+            WindowsSandboxLevel::Strict
+        );
+
+        // Test Full: network denied with write restrictions
+        let policy_full = WindowsSandboxPolicy {
+            read_allow: vec![],
+            write_deny: vec![PathBuf::from("/")],
+            network_allowed: false,
+            use_private_desktop: true,
+        };
+        assert_eq!(
+            get_sandbox_level(&policy_full),
+            WindowsSandboxLevel::Strict
+        );
+    }
+
+    #[test]
+    fn test_policy_read_only() {
+        let policy = WindowsSandboxPolicy::read_only();
+        assert!(!policy.network_allowed);
+        assert!(policy.use_private_desktop);
+    }
+
+    #[test]
+    fn test_policy_workspace_write() {
+        let writable_roots = vec![PathBuf::from("/workspace"), PathBuf::from("/home")];
+        let policy = WindowsSandboxPolicy::workspace_write(writable_roots.clone());
+
+        assert!(policy.network_allowed);
+        assert!(policy.use_private_desktop);
+        assert_eq!(policy.read_allow.len(), 2);
+
+        // Should include .git, .codex, .agents in write_deny
+        for root in &writable_roots {
+            assert!(policy.write_deny.iter().any(|p| p.starts_with(root)));
+        }
     }
 }
