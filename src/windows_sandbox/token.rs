@@ -29,7 +29,7 @@ use windows_sys::Win32::Security::Authorization::{
 };
 
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::System::Threading::GetCurrentProcess;
+use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 /// Flag for CreateRestrictedToken to disable all privileges
 const DISABLE_MAX_PRIVILEGE: u32 = 0x01;
@@ -105,7 +105,7 @@ unsafe fn set_default_dacl(h_token: HANDLE, sids: &[*mut c_void]) -> Result<(), 
 fn get_current_token_for_restriction() -> Result<HANDLE, String> {
     unsafe {
         let mut token: HANDLE = 0;
-        let ok = windows_sys::Win32::Security::OpenProcessToken(
+        let ok = OpenProcessToken(
             GetCurrentProcess(),
             TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY,
             &mut token,

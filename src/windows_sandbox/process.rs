@@ -22,8 +22,8 @@ use windows_sys::Win32::System::Console::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CreateProcessAsUserW, CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
-    STARTUPINFOW,
+    CreateProcessAsUserW, CREATE_UNICODE_ENVIRONMENT, OpenProcessToken, PROCESS_INFORMATION,
+    STARTF_USESTDHANDLES, STARTUPINFOW, TOKEN_ADJUST_SESSIONID, TOKEN_QUERY,
 };
 
 /// Result of spawning a process with pipes
@@ -287,10 +287,10 @@ pub unsafe fn spawn_process_with_pipes(
 pub fn get_current_user_token() -> Result<HANDLE, String> {
     unsafe {
         let mut token: HANDLE = 0;
-        let ok = windows_sys::Win32::Security::OpenProcessToken(
-            windows_sys::Win32::System::Threading::GetCurrentProcess(),
+        let ok = OpenProcessToken(
+            GetCurrentProcess(),
             0xF | // TOKEN_ALL_ACCESS
-                windows_sys::Win32::Security::TOKEN_ADJUST_SESSIONID,
+                TOKEN_ADJUST_SESSIONID,
             &mut token,
         );
         if ok == 0 {
