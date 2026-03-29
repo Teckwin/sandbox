@@ -153,7 +153,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           echo "Testing demo example (Windows)"
-          cargo run --example demo -- 2>$null 2>$null || echo "Demo may require platform-specific setup"
+          cargo run --example demo -- 2>$null || echo "Demo may require platform-specific setup"
 
   # Test on minimum Rust version
   minimum-version:
