@@ -83,26 +83,7 @@ pub use windows_sandbox::{
 
 #[cfg(test)]
 mod tests {
-    use crate::{get_platform_sandbox, SandboxCommand, SandboxManager, SandboxPolicy, SandboxType};
-    use std::collections::HashMap;
-    #[cfg(target_os = "macos")]
-    use std::ffi::OsString;
-    use std::path::PathBuf;
-
-    // Helper function to create OsString - only available on macOS
-    #[cfg(target_os = "macos")]
-    #[allow(dead_code)]
-    fn make_osstring(s: &str) -> OsString {
-        OsString::from(s)
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    #[allow(dead_code)]
-    fn make_osstring(_s: &str) -> std::ffi::OsString {
-        // On non-macOS, we don't actually use this function
-        // Return a dummy value to satisfy the compiler
-        std::ffi::OsString::new()
-    }
+    use crate::{get_platform_sandbox, SandboxType};
 
     #[test]
     fn test_platform_detection() {
@@ -138,6 +119,11 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn test_sandbox_manager_create_request() {
+        use crate::{SandboxCommand, SandboxManager, SandboxPolicy};
+        use std::collections::HashMap;
+        use std::ffi::OsString;
+        use std::path::PathBuf;
+
         let manager = SandboxManager::new();
         let command = SandboxCommand {
             program: OsString::from("ls"),
@@ -162,6 +148,11 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn test_readonly_policy() {
+        use crate::{SandboxCommand, SandboxManager, SandboxPolicy};
+        use std::collections::HashMap;
+        use std::ffi::OsString;
+        use std::path::PathBuf;
+
         let policy = SandboxPolicy::ReadOnly {
             file_system: crate::FileSystemSandboxPolicy::ReadOnly,
             network_access: crate::NetworkSandboxPolicy::NoAccess,
@@ -188,6 +179,11 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn test_workspace_policy() {
+        use crate::{SandboxCommand, SandboxManager, SandboxPolicy};
+        use std::collections::HashMap;
+        use std::ffi::OsString;
+        use std::path::PathBuf;
+
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![PathBuf::from("/tmp")],
             network_access: crate::NetworkSandboxPolicy::Localhost,
