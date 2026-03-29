@@ -104,7 +104,7 @@ unsafe fn set_default_dacl(h_token: HANDLE, sids: &[*mut c_void]) -> Result<(), 
 #[cfg(target_os = "windows")]
 fn get_current_token_for_restriction() -> Result<HANDLE, String> {
     unsafe {
-        let mut token: HANDLE = 0;
+        let mut token: HANDLE = std::ptr::null_mut();
         let ok = OpenProcessToken(
             GetCurrentProcess(),
             TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY,
@@ -144,7 +144,7 @@ fn world_sid() -> Result<Vec<u8>, String> {
 #[cfg(target_os = "windows")]
 unsafe fn get_logon_sid_bytes(token: HANDLE) -> Result<Vec<u8>, String> {
     // TokenGroups is 0x5 in windows-sys
-    const TokenGroups: u32 = 5;
+    const TokenGroups: i32 = 5;
     let mut size: u32 = 0;
     let res = GetTokenInformation(token, TokenGroups, ptr::null_mut(), 0, &mut size);
     if res != 0 || size == 0 {
@@ -255,7 +255,7 @@ unsafe fn create_token_with_caps_from(
     entries[logon_idx + 1].Sid = psid_everyone;
     entries[logon_idx + 1].Attributes = 0;
 
-    let mut new_token: HANDLE = 0;
+    let mut new_token: HANDLE = std::ptr::null_mut();
     let flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
     let ok = CreateRestrictedToken(
         base_token,
@@ -297,7 +297,7 @@ pub unsafe fn create_readonly_token() -> Result<HANDLE, String> {
 /// handle must be a valid token handle.
 #[cfg(target_os = "windows")]
 pub unsafe fn close_token(handle: HANDLE) -> Result<(), String> {
-    if handle == 0 {
+    if handle.is_null() {
         return Ok(());
     }
     if CloseHandle(handle) == 0 {

@@ -13,7 +13,7 @@ use std::path::Path;
 use std::ptr;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetCurrentProcess, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+    CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Security::CreateWellKnownSid;
 use windows_sys::Win32::Storage::FileSystem::{
@@ -24,7 +24,7 @@ use windows_sys::Win32::System::Console::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CreateProcessAsUserW, CREATE_UNICODE_ENVIRONMENT, OpenProcessToken, PROCESS_INFORMATION,
+    CreateProcessAsUserW, CREATE_UNICODE_ENVIRONMENT, GetCurrentProcess, OpenProcessToken, PROCESS_INFORMATION,
     STARTF_USESTDHANDLES, STARTUPINFOW,
 };
 
