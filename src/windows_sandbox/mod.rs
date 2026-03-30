@@ -173,6 +173,7 @@ pub fn get_sandbox_level(policy: &WindowsSandboxPolicy) -> WindowsSandboxLevel {
 mod windows_impl {
     use super::*;
     use crate::windows_sandbox::acl::{add_allow_ace, add_deny_write_ace, allow_null_device};
+    #[allow(unused_imports)]
     use crate::windows_sandbox::process::{spawn_process_with_pipes, StderrMode, StdinMode};
     use crate::windows_sandbox::token::{close_token, create_readonly_token};
     use std::io;
