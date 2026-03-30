@@ -172,6 +172,7 @@ pub fn get_sandbox_level(policy: &WindowsSandboxPolicy) -> WindowsSandboxLevel {
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::*;
+    #[allow(unused_imports)]
     use crate::windows_sandbox::acl::{add_allow_ace, add_deny_write_ace, allow_null_device};
     #[allow(unused_imports)]
     use crate::windows_sandbox::process::{spawn_process_with_pipes, StderrMode, StdinMode};
@@ -179,6 +180,9 @@ mod windows_impl {
     use std::io;
     use std::process::Command;
     use windows_sys::Win32::Security::CreateWellKnownSid;
+    use windows_sys::Win32::Security::TOKEN_ADJUST_DEFAULT;
+    #[allow(unused_imports)]
+    use windows_sys::Win32::Security::TOKEN_ADJUST_SESSIONID;
 
     /// Execute command with restricted token
     ///
