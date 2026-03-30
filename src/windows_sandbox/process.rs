@@ -30,6 +30,7 @@ use windows_sys::Win32::System::Threading::{
 };
 
 /// Result of spawning a process with pipes
+#[allow(dead_code)]
 pub struct PipeSpawnHandles {
     /// Process information
     pub process: PROCESS_INFORMATION,
@@ -43,6 +44,7 @@ pub struct PipeSpawnHandles {
 
 /// Stdin mode for process
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum StdinMode {
     /// Keep stdin open
     Open,
@@ -52,6 +54,7 @@ pub enum StdinMode {
 
 /// Stderr mode for process
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum StderrMode {
     /// Merge stderr into stdout
     MergeStdout,
