@@ -52,3 +52,5 @@ coverage/
 
 # Project specific
 .intent-engine/
+
+*.zip
