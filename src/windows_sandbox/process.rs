@@ -12,8 +12,11 @@ use std::ffi::c_void;
 use std::path::Path;
 use std::ptr;
 
+#[allow(unused_imports)]
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
+#[allow(unused_imports)]
 use windows_sys::Win32::Security::CreateWellKnownSid;
+#[allow(unused_imports)]
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL,
 };

@@ -6,9 +6,11 @@
 //!
 //! This module provides functionality to manage Windows ACLs for sandboxed file access.
 
+#[allow(unused_imports)]
 use std::ffi::c_void;
 use std::path::Path;
 
+#[allow(unused_imports)]
 use windows_sys::Win32::Foundation::{
     CloseHandle, LocalFree, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE,
 };
@@ -16,17 +18,22 @@ use windows_sys::Win32::Security::Authorization::{
     GetNamedSecurityInfoW, GetSecurityInfo, SetEntriesInAclW, SetNamedSecurityInfoW,
     SetSecurityInfo, EXPLICIT_ACCESS_W, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
+#[allow(unused_imports)]
 use windows_sys::Win32::Security::{
     MapGenericMask, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, GENERIC_MAPPING,
 };
+#[allow(unused_imports)]
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
     FILE_GENERIC_WRITE, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     READ_CONTROL,
 };
 
+#[allow(dead_code)]
 const SE_FILE_OBJECT: i32 = 1;
+#[allow(dead_code)]
 const GENERIC_WRITE_MASK: u32 = 0x4000_0000;
+#[allow(dead_code)]
 const DENY_ACCESS: i32 = 3;
 
 /// Fetch DACL via handle-based query

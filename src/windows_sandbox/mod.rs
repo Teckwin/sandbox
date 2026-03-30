@@ -431,6 +431,19 @@ pub use windows_impl::create_restricted_token;
 pub use windows_impl::execute_sandboxed_command;
 pub use windows_impl::execute_with_restricted_token;
 
+// Note: The following imports are for future Windows implementation
+// They are marked as allowed because they will be used when the actual
+// Windows implementation is connected to this module
+#[allow(unused_imports)]
+#[cfg(target_os = "windows")]
+use self::acl::{add_allow_ace, add_deny_write_ace, allow_null_device};
+#[allow(unused_imports)]
+#[cfg(target_os = "windows")]
+use self::process::{spawn_process_with_pipes, StderrMode, StdinMode};
+#[allow(unused_imports)]
+#[cfg(target_os = "windows")]
+use self::token::{close_token, create_readonly_token};
+
 #[cfg(test)]
 mod tests {
     use super::*;
