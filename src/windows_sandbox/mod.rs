@@ -225,28 +225,28 @@ mod windows_impl {
         if sandbox_level != WindowsSandboxLevel::Disabled {
             // Use the restricted token execution path
             // Note: execute_with_restricted_token is unsafe, but we handle the safety internally
-            return unsafe { execute_with_restricted_token(
-                program, args, policy,
-            )}.map(|_| {
-                // Fallback to standard Command for now since the full implementation
-                // doesn't return output. This needs to be improved to properly capture output.
-                let mut cmd = Command::new(program);
-                cmd.args(args);
-                cmd.current_dir(cwd);
-                for (key, value) in env {
-                    cmd.env(key, value);
-                }
-                cmd.stdin(Stdio::null());
-                cmd.stdout(Stdio::piped());
-                cmd.stderr(Stdio::piped());
-                let output = cmd.output()?;
-                Ok(SandboxExecutionResult {
-                    exit_code: output.status.code().unwrap_or(-1),
-                    stdout: output.stdout,
-                    stderr: output.stderr,
-                    timed_out: false,
+            return unsafe { execute_with_restricted_token(program, args, policy) }
+                .map(|_| {
+                    // Fallback to standard Command for now since the full implementation
+                    // doesn't return output. This needs to be improved to properly capture output.
+                    let mut cmd = Command::new(program);
+                    cmd.args(args);
+                    cmd.current_dir(cwd);
+                    for (key, value) in env {
+                        cmd.env(key, value);
+                    }
+                    cmd.stdin(Stdio::null());
+                    cmd.stdout(Stdio::piped());
+                    cmd.stderr(Stdio::piped());
+                    let output = cmd.output()?;
+                    Ok(SandboxExecutionResult {
+                        exit_code: output.status.code().unwrap_or(-1),
+                        stdout: output.stdout,
+                        stderr: output.stderr,
+                        timed_out: false,
+                    })
                 })
-            }).unwrap_or_else(|e| Err(e));
+                .unwrap_or_else(|e| Err(e));
         }
 
         // Fallback to standard Command for disabled sandbox
