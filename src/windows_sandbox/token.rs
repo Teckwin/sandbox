@@ -15,6 +15,7 @@ use std::ptr;
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_SUCCESS, HANDLE};
 
 #[cfg(target_os = "windows")]
+#[allow(unused_imports)]
 use windows_sys::Win32::Security::{
     AdjustTokenPrivileges, CopySid, CreateRestrictedToken, CreateWellKnownSid, GetLengthSid,
     GetTokenInformation, LookupPrivilegeValueW, SetTokenInformation, TokenDefaultDacl, ACL,

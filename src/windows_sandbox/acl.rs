@@ -14,6 +14,7 @@ use std::path::Path;
 use windows_sys::Win32::Foundation::{
     CloseHandle, LocalFree, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE,
 };
+#[allow(unused_imports)]
 use windows_sys::Win32::Security::Authorization::{
     GetNamedSecurityInfoW, GetSecurityInfo, SetEntriesInAclW, SetNamedSecurityInfoW,
     SetSecurityInfo, EXPLICIT_ACCESS_W, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,

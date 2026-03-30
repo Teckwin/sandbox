@@ -2,6 +2,7 @@
 //!
 //! Provides process-level security hardening across platforms.
 
+#[allow(unused_imports)]
 use std::ffi::OsString;
 
 #[cfg(unix)]

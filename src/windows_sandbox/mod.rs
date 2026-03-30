@@ -179,6 +179,7 @@ mod windows_impl {
     use crate::windows_sandbox::token::{close_token, create_readonly_token};
     use std::io;
     use std::process::Command;
+    #[allow(unused_imports)]
     use windows_sys::Win32::Security::CreateWellKnownSid;
     #[allow(unused_imports)]
     use windows_sys::Win32::Security::TOKEN_ADJUST_DEFAULT;
