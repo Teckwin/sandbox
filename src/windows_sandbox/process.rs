@@ -300,6 +300,7 @@ pub fn get_current_user_token() -> Result<HANDLE, String> {
 }
 
 #[cfg(test)]
+#[cfg(target_os = "windows")]
 mod tests {
     use super::*;
 

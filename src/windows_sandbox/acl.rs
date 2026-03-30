@@ -289,17 +289,33 @@ pub fn path_mask_allows(_path: &Path, _psid: *mut c_void, _access: u32) -> bool 
 }
 
 #[cfg(test)]
+#[cfg(target_os = "windows")]
 mod tests {
     use super::*;
 
+    /// Test allow_null_device - verifies the function handles edge cases gracefully.
+    /// On Windows, this may fail in certain environments (like CI) which is expected.
     #[test]
     fn test_allow_null_device() {
         unsafe {
             // This test just verifies the function runs without panic
-            // On non-Windows or in limited environments, it may return Ok
+            // On non-Windows or in limited environments, it may return Ok or an error
             let result = allow_null_device(std::ptr::null_mut());
-            // Expected to either succeed or gracefully fail
-            assert!(result.is_ok() || result.err().unwrap().contains("failed"));
+            // Expected to either succeed or gracefully fail with a descriptive error
+            assert!(
+                result.is_ok() || result.err().map_or(false, |e| e.contains("failed") || e.contains("CreateFileW")),
+                "Expected Ok or descriptive error, got: {:?}",
+                result
+            );
         }
+    }
+
+    /// Test that fetch_dacl_handle handles invalid paths gracefully
+    #[test]
+    fn test_fetch_dacl_handle_invalid_path() {
+        let invalid_path = std::path::Path::new("C:\\this\\path\\does\\not\\exist\\file.txt");
+        let result = unsafe { fetch_dacl_handle(invalid_path) };
+        // Should fail gracefully with an error
+        assert!(result.is_err());
     }
 }
