@@ -302,8 +302,12 @@ mod tests {
             // On non-Windows or in limited environments, it may return Ok or an error
             let result = allow_null_device(std::ptr::null_mut());
             // Expected to either succeed or gracefully fail with a descriptive error
+            let is_ok = result.is_ok();
+            let has_descriptive_error = result
+                .err()
+                .map_or(false, |e| e.contains("failed") || e.contains("CreateFileW"));
             assert!(
-                result.is_ok() || result.err().map_or(false, |e| e.contains("failed") || e.contains("CreateFileW")),
+                is_ok || has_descriptive_error,
                 "Expected Ok or descriptive error, got: {:?}",
                 result
             );
