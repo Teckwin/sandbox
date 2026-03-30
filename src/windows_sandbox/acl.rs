@@ -40,6 +40,7 @@ const DENY_ACCESS: i32 = 3;
 ///
 /// # Safety
 /// Caller must free the returned security descriptor.
+#[allow(dead_code)]
 pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void), String> {
     let wpath: Vec<u16> = path
         .to_string_lossy()
@@ -81,6 +82,7 @@ pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void), 
 ///
 /// # Safety
 /// Caller must ensure `psid` is a valid SID pointer.
+#[allow(dead_code)]
 pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<(), String> {
     let (p_dacl, p_sd) = unsafe { fetch_dacl_handle(path)? };
     let mut explicit: EXPLICIT_ACCESS_W = std::mem::zeroed();
@@ -144,6 +146,7 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<(), String
 ///
 /// # Safety
 /// Caller must ensure `psid` is a valid SID pointer.
+#[allow(dead_code)]
 pub unsafe fn add_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<(), String> {
     let (p_dacl, p_sd) = unsafe { fetch_dacl_handle(path)? };
     let mut explicit: EXPLICIT_ACCESS_W = std::mem::zeroed();
@@ -207,6 +210,7 @@ pub unsafe fn add_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<(), S
 ///
 /// # Safety
 /// Caller must ensure `psid` is a valid SID pointer.
+#[allow(dead_code)]
 pub unsafe fn allow_null_device(psid: *mut c_void) -> Result<(), String> {
     let desired = 0x00020000 | 0x00040000; // READ_CONTROL | WRITE_DAC
     let wnull = r"\\.\NUL"
@@ -278,18 +282,21 @@ pub unsafe fn allow_null_device(psid: *mut c_void) -> Result<(), String> {
 }
 
 /// Ensure allow mask ACEs exist for a path (helper for compatibility)
+#[allow(dead_code)]
 pub fn ensure_allow_mask_aces(_path: &Path, _psid: *mut c_void) -> Result<(), String> {
     // Placeholder for full implementation - basic ACL already handles this
     Ok(())
 }
 
 /// Ensure write allow ACEs exist for a path
+#[allow(dead_code)]
 pub fn ensure_allow_write_aces(_path: &Path, _psid: *mut c_void) -> Result<(), String> {
     // Placeholder for full implementation
     Ok(())
 }
 
 /// Check if a path's mask allows specific access
+#[allow(dead_code)]
 pub fn path_mask_allows(_path: &Path, _psid: *mut c_void, _access: u32) -> bool {
     // Placeholder for full implementation
     true
