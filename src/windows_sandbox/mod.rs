@@ -225,12 +225,7 @@ mod windows_impl {
         if sandbox_level != WindowsSandboxLevel::Disabled {
             // Use the restricted token execution path
             return Self::execute_with_restricted_token(
-                program,
-                args,
-                cwd,
-                env,
-                policy,
-                timeout_ms,
+                program, args, cwd, env, policy, timeout_ms,
             );
         }
 
@@ -503,10 +498,7 @@ mod tests {
             network_allowed: true,
             use_private_desktop: false,
         };
-        assert_eq!(
-            get_sandbox_level(&policy_basic),
-            WindowsSandboxLevel::Basic
-        );
+        assert_eq!(get_sandbox_level(&policy_basic), WindowsSandboxLevel::Basic);
 
         // Test Strict: network denied
         let policy_strict = WindowsSandboxPolicy {
@@ -527,10 +519,7 @@ mod tests {
             network_allowed: false,
             use_private_desktop: true,
         };
-        assert_eq!(
-            get_sandbox_level(&policy_full),
-            WindowsSandboxLevel::Strict
-        );
+        assert_eq!(get_sandbox_level(&policy_full), WindowsSandboxLevel::Strict);
     }
 
     #[test]
