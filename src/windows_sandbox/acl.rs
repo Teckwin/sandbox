@@ -46,7 +46,7 @@ pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void), 
         std::ptr::null_mut(),
         OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS,
-        0,
+        std::ptr::null_mut(),
     );
     if h == INVALID_HANDLE_VALUE {
         return Err(format!("CreateFileW failed for {}", path.display()));
@@ -213,7 +213,7 @@ pub unsafe fn allow_null_device(psid: *mut c_void) -> Result<(), String> {
         std::ptr::null_mut(),
         OPEN_EXISTING,
         0x80, // FILE_ATTRIBUTE_NORMAL
-        0,
+        std::ptr::null_mut(),
     );
     if h.is_null() || h == INVALID_HANDLE_VALUE {
         return Ok(()); // Silently fail - null device might not exist in all contexts

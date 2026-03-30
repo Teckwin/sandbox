@@ -196,12 +196,12 @@ pub unsafe fn spawn_process_with_pipes(
     stderr_mode: StderrMode,
     use_private_desktop: bool,
 ) -> Result<PipeSpawnHandles, String> {
-    let mut in_r: HANDLE = 0;
-    let mut in_w: HANDLE = 0;
-    let mut out_r: HANDLE = 0;
-    let mut out_w: HANDLE = 0;
-    let mut err_r: HANDLE = 0;
-    let mut err_w: HANDLE = 0;
+    let mut in_r: HANDLE = std::ptr::null_mut();
+    let mut in_w: HANDLE = std::ptr::null_mut();
+    let mut out_r: HANDLE = std::ptr::null_mut();
+    let mut out_w: HANDLE = std::ptr::null_mut();
+    let mut err_r: HANDLE = std::ptr::null_mut();
+    let mut err_w: HANDLE = std::ptr::null_mut();
 
     unsafe {
         if CreatePipe(&mut in_r, &mut in_w, ptr::null_mut(), 0) == 0 {
