@@ -224,9 +224,10 @@ mod windows_impl {
         // If policy indicates we need sandboxing, use the restricted token path
         if sandbox_level != WindowsSandboxLevel::Disabled {
             // Use the restricted token execution path
-            return execute_with_restricted_token(
+            // Note: execute_with_restricted_token is unsafe, but we handle the safety internally
+            return unsafe { execute_with_restricted_token(
                 program, args, policy,
-            ).map(|_| {
+            )}.map(|_| {
                 // Fallback to standard Command for now since the full implementation
                 // doesn't return output. This needs to be improved to properly capture output.
                 let mut cmd = Command::new(program);
