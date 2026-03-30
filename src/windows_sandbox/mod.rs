@@ -180,6 +180,7 @@ mod windows_impl {
     use std::io;
     use std::process::Command;
     use windows_sys::Win32::Security::CreateWellKnownSid;
+    #[allow(unused_imports)]
     use windows_sys::Win32::Security::TOKEN_ADJUST_DEFAULT;
     #[allow(unused_imports)]
     use windows_sys::Win32::Security::TOKEN_ADJUST_SESSIONID;
