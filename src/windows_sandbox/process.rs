@@ -160,6 +160,9 @@ pub unsafe fn create_process_as_user(
         .chain(std::iter::once(0))
         .collect();
 
+    // Call CreateProcessAsUserW
+    // Note: si must be mut because Windows API expects mutable reference
+    #[allow(clippy::unnecessary_mut_passed)]
     let result = CreateProcessAsUserW(
         h_token,
         ptr::null(), // Application name (use command line)
