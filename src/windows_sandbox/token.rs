@@ -144,6 +144,7 @@ fn world_sid() -> Result<Vec<u8>, String> {
 #[cfg(target_os = "windows")]
 unsafe fn get_logon_sid_bytes(token: HANDLE) -> Result<Vec<u8>, String> {
     // TokenGroups is 0x5 in windows-sys
+    #[allow(non_upper_case_globals)]
     const TokenGroups: i32 = 5;
     let mut size: u32 = 0;
     let res = GetTokenInformation(token, TokenGroups, ptr::null_mut(), 0, &mut size);

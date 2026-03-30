@@ -357,11 +357,11 @@ mod windows_impl {
     ///
     /// # Safety
     /// This function creates a restricted token handle that must be properly closed.
-    #[allow(clippy::missing_safety_doc)]
+    #[allow(clippy::missing_safety_doc, clippy::io_other_error)]
     pub unsafe fn create_restricted_token() -> io::Result<isize> {
         match create_readonly_token() {
             Ok(token) => Ok(token as isize),
-            Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            Err(e) => Err(io::Error::other(e)),
         }
     }
 }
