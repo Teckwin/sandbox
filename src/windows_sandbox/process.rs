@@ -12,8 +12,11 @@ use std::ffi::c_void;
 use std::path::Path;
 use std::ptr;
 
+#[allow(unused_imports)]
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
+#[allow(unused_imports)]
 use windows_sys::Win32::Security::CreateWellKnownSid;
+#[allow(unused_imports)]
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL,
 };
@@ -22,11 +25,12 @@ use windows_sys::Win32::System::Console::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CreateProcessAsUserW, CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
-    STARTUPINFOW,
+    CreateProcessAsUserW, GetCurrentProcess, OpenProcessToken, CREATE_UNICODE_ENVIRONMENT,
+    PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
 };
 
 /// Result of spawning a process with pipes
+#[allow(dead_code)]
 pub struct PipeSpawnHandles {
     /// Process information
     pub process: PROCESS_INFORMATION,
@@ -40,6 +44,7 @@ pub struct PipeSpawnHandles {
 
 /// Stdin mode for process
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum StdinMode {
     /// Keep stdin open
     Open,
@@ -49,6 +54,7 @@ pub enum StdinMode {
 
 /// Stderr mode for process
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum StderrMode {
     /// Merge stderr into stdout
     MergeStdout,
@@ -92,10 +98,11 @@ pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
 }
 
 /// Ensure stdio handles are inheritable
+#[allow(dead_code)]
 unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<(), String> {
     for kind in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
         let h = GetStdHandle(kind);
-        if h == 0 || h == INVALID_HANDLE_VALUE {
+        if h.is_null() || h == INVALID_HANDLE_VALUE {
             return Err(format!("GetStdHandle failed: {}", GetLastError()));
         }
         if windows_sys::Win32::Foundation::SetHandleInformation(h, 0x00000001, 0x00000001) == 0 {
@@ -115,12 +122,13 @@ unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<(), String> 
 /// # Safety
 /// Caller must provide a valid primary token handle with appropriate access,
 /// and the argv, cwd, and env_map must remain valid for the duration of the call.
+#[allow(dead_code)]
 pub unsafe fn create_process_as_user(
     h_token: HANDLE,
     argv: &[String],
     cwd: &Path,
     env_map: &HashMap<String, String>,
-    logs_base_dir: Option<&Path>,
+    _logs_base_dir: Option<&Path>,
     stdio: Option<(HANDLE, HANDLE, HANDLE)>,
     _use_private_desktop: bool,
 ) -> Result<PROCESS_INFORMATION, String> {
@@ -129,7 +137,7 @@ pub unsafe fn create_process_as_user(
         .map(|a| quote_windows_arg(a))
         .collect::<Vec<_>>()
         .join(" ");
-    let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
+    let cmdline: Vec<u16> = to_wide(&cmdline_str);
     let env_block = make_env_block(env_map);
 
     let mut si: STARTUPINFOW = std::mem::zeroed();
@@ -157,6 +165,9 @@ pub unsafe fn create_process_as_user(
         .chain(std::iter::once(0))
         .collect();
 
+    // Call CreateProcessAsUserW
+    // Note: si must be mut because Windows API expects mutable reference
+    #[allow(clippy::unnecessary_mut_passed)]
     let result = CreateProcessAsUserW(
         h_token,
         ptr::null(), // Application name (use command line)
@@ -176,7 +187,7 @@ pub unsafe fn create_process_as_user(
     }
 
     // Close thread handle - we don't need it
-    if pi.hThread != 0 {
+    if !pi.hThread.is_null() {
         let _ = CloseHandle(pi.hThread);
     }
 
@@ -187,6 +198,7 @@ pub unsafe fn create_process_as_user(
 ///
 /// # Safety
 /// Caller must provide a valid primary token handle.
+#[allow(dead_code)]
 pub unsafe fn spawn_process_with_pipes(
     h_token: HANDLE,
     argv: &[String],
@@ -196,12 +208,12 @@ pub unsafe fn spawn_process_with_pipes(
     stderr_mode: StderrMode,
     use_private_desktop: bool,
 ) -> Result<PipeSpawnHandles, String> {
-    let mut in_r: HANDLE = 0;
-    let mut in_w: HANDLE = 0;
-    let mut out_r: HANDLE = 0;
-    let mut out_w: HANDLE = 0;
-    let mut err_r: HANDLE = 0;
-    let mut err_w: HANDLE = 0;
+    let mut in_r: HANDLE = std::ptr::null_mut();
+    let mut in_w: HANDLE = std::ptr::null_mut();
+    let mut out_r: HANDLE = std::ptr::null_mut();
+    let mut out_w: HANDLE = std::ptr::null_mut();
+    let mut err_r: HANDLE = std::ptr::null_mut();
+    let mut err_w: HANDLE = std::ptr::null_mut();
 
     unsafe {
         if CreatePipe(&mut in_r, &mut in_w, ptr::null_mut(), 0) == 0 {
@@ -284,13 +296,13 @@ pub unsafe fn spawn_process_with_pipes(
 }
 
 /// Get the current user token for restriction
+#[allow(dead_code)]
 pub fn get_current_user_token() -> Result<HANDLE, String> {
     unsafe {
-        let mut token: HANDLE = 0;
-        let ok = windows_sys::Win32::Security::OpenProcessToken(
-            windows_sys::Win32::System::Threading::GetCurrentProcess(),
-            0xF | // TOKEN_ALL_ACCESS
-                windows_sys::Win32::Security::TOKEN_ADJUST_SESSIONID,
+        let mut token: HANDLE = std::ptr::null_mut();
+        let ok = OpenProcessToken(
+            GetCurrentProcess(),
+            0x1F, // TOKEN_ALL_ACCESS (0xF) | TOKEN_ADJUST_SESSIONID (0x10)
             &mut token,
         );
         if ok == 0 {
@@ -301,6 +313,7 @@ pub fn get_current_user_token() -> Result<HANDLE, String> {
 }
 
 #[cfg(test)]
+#[cfg(target_os = "windows")]
 mod tests {
     use super::*;
 

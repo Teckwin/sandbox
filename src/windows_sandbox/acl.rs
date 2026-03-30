@@ -6,31 +6,42 @@
 //!
 //! This module provides functionality to manage Windows ACLs for sandboxed file access.
 
+#[allow(unused_imports)]
 use std::ffi::c_void;
 use std::path::Path;
 
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE};
+#[allow(unused_imports)]
+use windows_sys::Win32::Foundation::{
+    CloseHandle, LocalFree, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE,
+};
+#[allow(unused_imports)]
 use windows_sys::Win32::Security::Authorization::{
     GetNamedSecurityInfoW, GetSecurityInfo, SetEntriesInAclW, SetNamedSecurityInfoW,
     SetSecurityInfo, EXPLICIT_ACCESS_W, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
+#[allow(unused_imports)]
 use windows_sys::Win32::Security::{
-    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, GENERIC_MAPPING,
+    MapGenericMask, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, GENERIC_MAPPING,
 };
+#[allow(unused_imports)]
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
     FILE_GENERIC_WRITE, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     READ_CONTROL,
 };
 
-const SE_KERNEL_OBJECT: u32 = 6;
+#[allow(dead_code)]
+const SE_FILE_OBJECT: i32 = 1;
+#[allow(dead_code)]
 const GENERIC_WRITE_MASK: u32 = 0x4000_0000;
+#[allow(dead_code)]
 const DENY_ACCESS: i32 = 3;
 
 /// Fetch DACL via handle-based query
 ///
 /// # Safety
 /// Caller must free the returned security descriptor.
+#[allow(dead_code)]
 pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void), String> {
     let wpath: Vec<u16> = path
         .to_string_lossy()
@@ -44,7 +55,7 @@ pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void), 
         std::ptr::null_mut(),
         OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS,
-        0,
+        std::ptr::null_mut(),
     );
     if h == INVALID_HANDLE_VALUE {
         return Err(format!("CreateFileW failed for {}", path.display()));
@@ -53,7 +64,7 @@ pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void), 
     let mut p_dacl: *mut ACL = std::ptr::null_mut();
     let code = GetSecurityInfo(
         h,
-        SE_KERNEL_OBJECT as i32,
+        SE_FILE_OBJECT,
         DACL_SECURITY_INFORMATION,
         std::ptr::null_mut(),
         std::ptr::null_mut(),
@@ -72,6 +83,7 @@ pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void), 
 ///
 /// # Safety
 /// Caller must ensure `psid` is a valid SID pointer.
+#[allow(dead_code)]
 pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<(), String> {
     let (p_dacl, p_sd) = unsafe { fetch_dacl_handle(path)? };
     let mut explicit: EXPLICIT_ACCESS_W = std::mem::zeroed();
@@ -135,6 +147,7 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<(), String
 ///
 /// # Safety
 /// Caller must ensure `psid` is a valid SID pointer.
+#[allow(dead_code)]
 pub unsafe fn add_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<(), String> {
     let (p_dacl, p_sd) = unsafe { fetch_dacl_handle(path)? };
     let mut explicit: EXPLICIT_ACCESS_W = std::mem::zeroed();
@@ -198,6 +211,7 @@ pub unsafe fn add_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<(), S
 ///
 /// # Safety
 /// Caller must ensure `psid` is a valid SID pointer.
+#[allow(dead_code)]
 pub unsafe fn allow_null_device(psid: *mut c_void) -> Result<(), String> {
     let desired = 0x00020000 | 0x00040000; // READ_CONTROL | WRITE_DAC
     let wnull = r"\\.\NUL"
@@ -211,16 +225,16 @@ pub unsafe fn allow_null_device(psid: *mut c_void) -> Result<(), String> {
         std::ptr::null_mut(),
         OPEN_EXISTING,
         0x80, // FILE_ATTRIBUTE_NORMAL
-        0,
+        std::ptr::null_mut(),
     );
-    if h == 0 || h == INVALID_HANDLE_VALUE {
+    if h.is_null() || h == INVALID_HANDLE_VALUE {
         return Ok(()); // Silently fail - null device might not exist in all contexts
     }
     let mut p_sd: *mut c_void = std::ptr::null_mut();
     let mut p_dacl: *mut ACL = std::ptr::null_mut();
     let code = GetSecurityInfo(
         h,
-        SE_KERNEL_OBJECT as i32,
+        SE_FILE_OBJECT,
         DACL_SECURITY_INFORMATION,
         std::ptr::null_mut(),
         std::ptr::null_mut(),
@@ -247,7 +261,7 @@ pub unsafe fn allow_null_device(psid: *mut c_void) -> Result<(), String> {
         if code2 == ERROR_SUCCESS {
             let _ = SetSecurityInfo(
                 h,
-                SE_KERNEL_OBJECT as i32,
+                SE_FILE_OBJECT,
                 DACL_SECURITY_INFORMATION,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -269,35 +283,60 @@ pub unsafe fn allow_null_device(psid: *mut c_void) -> Result<(), String> {
 }
 
 /// Ensure allow mask ACEs exist for a path (helper for compatibility)
+#[allow(dead_code)]
 pub fn ensure_allow_mask_aces(_path: &Path, _psid: *mut c_void) -> Result<(), String> {
     // Placeholder for full implementation - basic ACL already handles this
     Ok(())
 }
 
 /// Ensure write allow ACEs exist for a path
+#[allow(dead_code)]
 pub fn ensure_allow_write_aces(_path: &Path, _psid: *mut c_void) -> Result<(), String> {
     // Placeholder for full implementation
     Ok(())
 }
 
 /// Check if a path's mask allows specific access
+#[allow(dead_code)]
 pub fn path_mask_allows(_path: &Path, _psid: *mut c_void, _access: u32) -> bool {
     // Placeholder for full implementation
     true
 }
 
 #[cfg(test)]
+#[cfg(target_os = "windows")]
 mod tests {
     use super::*;
 
+    /// Test allow_null_device - verifies the function handles edge cases gracefully.
+    /// On Windows, this may fail in certain environments (like CI) which is expected.
     #[test]
     fn test_allow_null_device() {
         unsafe {
             // This test just verifies the function runs without panic
-            // On non-Windows or in limited environments, it may return Ok
+            // On non-Windows or in limited environments, it may return Ok or an error
             let result = allow_null_device(std::ptr::null_mut());
-            // Expected to either succeed or gracefully fail
-            assert!(result.is_ok() || result.err().unwrap().contains("failed"));
+            // Expected to either succeed or gracefully fail with a descriptive error
+            if result.is_ok() {
+                // Success case - test passes
+                return;
+            }
+            // Check if error is descriptive
+            let err = result.unwrap_err();
+            assert!(
+                err.contains("failed") || err.contains("CreateFileW"),
+                "Expected Ok or descriptive error, got: {}",
+                err
+            );
         }
+    }
+
+    /// Test that fetch_dacl_handle handles invalid paths gracefully
+    #[test]
+    fn test_fetch_dacl_handle_invalid_path() {
+        let invalid_path = std::path::Path::new("C:\\this\\path\\does\\not\\exist\\file.txt");
+        let result = unsafe { fetch_dacl_handle(invalid_path) };
+        // Should fail gracefully with an error
+        assert!(result.is_err());
     }
 }
