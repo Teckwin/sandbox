@@ -332,7 +332,10 @@ mod tests {
                     // This is expected behavior - the function is still correct,
                     // it just can't execute in this environment.
                     // Log the error for debugging but don't fail the test
-                    eprintln!("create_readonly_token failed (expected in non-elevated CI): {}", e);
+                    eprintln!(
+                        "create_readonly_token failed (expected in non-elevated CI): {}",
+                        e
+                    );
                 }
             }
         }

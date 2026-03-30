@@ -302,14 +302,16 @@ mod tests {
             // On non-Windows or in limited environments, it may return Ok or an error
             let result = allow_null_device(std::ptr::null_mut());
             // Expected to either succeed or gracefully fail with a descriptive error
-            let is_ok = result.is_ok();
-            let has_descriptive_error = result
-                .err()
-                .map_or(false, |e| e.contains("failed") || e.contains("CreateFileW"));
+            if result.is_ok() {
+                // Success case - test passes
+                return;
+            }
+            // Check if error is descriptive
+            let err = result.unwrap_err();
             assert!(
-                is_ok || has_descriptive_error,
-                "Expected Ok or descriptive error, got: {:?}",
-                result
+                err.contains("failed") || err.contains("CreateFileW"),
+                "Expected Ok or descriptive error, got: {}",
+                err
             );
         }
     }
