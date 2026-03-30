@@ -95,6 +95,7 @@ pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
 }
 
 /// Ensure stdio handles are inheritable
+#[allow(dead_code)]
 unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<(), String> {
     for kind in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
         let h = GetStdHandle(kind);
@@ -118,6 +119,7 @@ unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<(), String> 
 /// # Safety
 /// Caller must provide a valid primary token handle with appropriate access,
 /// and the argv, cwd, and env_map must remain valid for the duration of the call.
+#[allow(dead_code)]
 pub unsafe fn create_process_as_user(
     h_token: HANDLE,
     argv: &[String],
@@ -193,6 +195,7 @@ pub unsafe fn create_process_as_user(
 ///
 /// # Safety
 /// Caller must provide a valid primary token handle.
+#[allow(dead_code)]
 pub unsafe fn spawn_process_with_pipes(
     h_token: HANDLE,
     argv: &[String],
@@ -290,6 +293,7 @@ pub unsafe fn spawn_process_with_pipes(
 }
 
 /// Get the current user token for restriction
+#[allow(dead_code)]
 pub fn get_current_user_token() -> Result<HANDLE, String> {
     unsafe {
         let mut token: HANDLE = std::ptr::null_mut();

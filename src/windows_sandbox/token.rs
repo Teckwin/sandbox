@@ -203,6 +203,7 @@ unsafe fn enable_single_privilege(token: HANDLE, name: &str) -> Result<(), Strin
             Attributes: 2, // SE_PRIVILEGE_ENABLED
         }],
     };
+    #[allow(clippy::unnecessary_mut_passed)]
     if AdjustTokenPrivileges(token, 0, &mut tp, 0, ptr::null_mut(), ptr::null_mut()) == 0 {
         return Err(format!("AdjustTokenPrivileges error {}", GetLastError()));
     }
