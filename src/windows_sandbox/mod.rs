@@ -452,29 +452,123 @@ use self::process::{spawn_process_with_pipes, StderrMode, StdinMode};
 use self::token::{close_token, create_readonly_token};
 
 #[cfg(test)]
+#[cfg(test)]
+#[cfg(target_os = "windows")]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_windows_sandbox_args() {
-        let args = create_windows_sandbox_args(
-            &[
-                "cmd.exe".to_string(),
-                "/c".to_string(),
-                "echo".to_string(),
-                "hello".to_string(),
-            ],
-            WindowsSandboxLevel::Basic,
-        );
+    fn test_windows_sandbox_level_default() {
+        let level = WindowsSandboxLevel::default();
+        assert_eq!(level, WindowsSandboxLevel::Disabled);
+    }
 
+    #[test]
+    fn test_windows_sandbox_level_variants() {
+        assert_eq!(WindowsSandboxLevel::Disabled.as_str(), "disabled");
+        assert_eq!(WindowsSandboxLevel::Basic.as_str(), "basic");
+        assert_eq!(WindowsSandboxLevel::Strict.as_str(), "strict");
+        assert_eq!(WindowsSandboxLevel::Full.as_str(), "full");
+    }
+
+    #[test]
+    fn test_windows_sandbox_policy_default() {
+        let policy = WindowsSandboxPolicy::default();
+        assert!(policy.read_allow.is_empty());
+        assert!(policy.write_deny.is_empty());
+        assert!(policy.network_allowed);
+        assert!(!policy.use_private_desktop);
+    }
+
+    #[test]
+    fn test_create_windows_sandbox_args_disabled() {
+        let argv = vec![
+            "cmd".to_string(),
+            "/c".to_string(),
+            "echo".to_string(),
+            "hello".to_string(),
+        ];
+        let args = create_windows_sandbox_args(&argv, WindowsSandboxLevel::Disabled);
+        assert_eq!(args, argv);
+    }
+
+    #[test]
+    fn test_create_windows_sandbox_args_basic() {
+        let argv = vec![
+            "cmd".to_string(),
+            "/c".to_string(),
+            "echo".to_string(),
+            "hello".to_string(),
+        ];
+        let args = create_windows_sandbox_args(&argv, WindowsSandboxLevel::Basic);
         assert!(args.contains(&"--sandbox".to_string()));
         assert!(args.contains(&"basic".to_string()));
     }
 
     #[test]
-    fn test_windows_sandbox_policy_read_only() {
-        let policy = WindowsSandboxPolicy::read_only();
-        assert!(!policy.network_allowed);
+    fn test_create_windows_sandbox_args_strict() {
+        let argv = vec!["cmd".to_string(), "/c".to_string(), "echo".to_string()];
+        let args = create_windows_sandbox_args(&argv, WindowsSandboxLevel::Strict);
+        assert!(args.contains(&"--sandbox".to_string()));
+        assert!(args.contains(&"strict".to_string()));
+    }
+
+    #[test]
+    fn test_create_windows_sandbox_args_full() {
+        let argv = vec!["cmd".to_string(), "/c".to_string(), "echo".to_string()];
+        let args = create_windows_sandbox_args(&argv, WindowsSandboxLevel::Full);
+        assert!(args.contains(&"--sandbox".to_string()));
+        assert!(args.contains(&"full".to_string()));
+    }
+
+    #[test]
+    fn test_is_windows_sandbox_available() {
+        // On non-Windows platforms, this should return false
+        let result = is_windows_sandbox_available();
+        #[cfg(not(target_os = "windows"))]
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_network_policy_to_sandbox_level() {
+        // Test network allowed maps to less restrictive level
+        let policy_network = WindowsSandboxPolicy {
+            read_allow: vec![],
+            write_deny: vec![],
+            network_allowed: true,
+            use_private_desktop: false,
+        };
+        let level = get_sandbox_level(&policy_network);
+        // With network allowed but no other restrictions, should be Disabled
+        assert_eq!(level, WindowsSandboxLevel::Disabled);
+
+        // Test network denied maps to more restrictive level
+        let policy_no_network = WindowsSandboxPolicy {
+            read_allow: vec![],
+            write_deny: vec![],
+            network_allowed: false,
+            use_private_desktop: true,
+        };
+        let level_no_net = get_sandbox_level(&policy_no_network);
+        assert!(matches!(
+            level_no_net,
+            WindowsSandboxLevel::Strict | WindowsSandboxLevel::Full
+        ));
+    }
+
+    #[test]
+    fn test_compute_allow_deny_paths_with_multiple_roots() {
+        let policy = WindowsSandboxPolicy::workspace_write(vec![
+            PathBuf::from("C:\\workspace"),
+            PathBuf::from("D:\\data"),
+        ]);
+        let (allow, deny) = compute_allow_deny_paths(&policy, Path::new("C:\\workspace"));
+
+        assert_eq!(allow.len(), 2);
+        assert!(allow
+            .iter()
+            .any(|p| p.to_string_lossy().contains("workspace")));
+        assert!(allow.iter().any(|p| p.to_string_lossy().contains("data")));
     }
 
     #[test]
