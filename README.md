@@ -32,7 +32,7 @@ A Rust crate providing cross-platform sandbox isolation for AI agent tools.
 ```toml
 # Cargo.toml
 [dependencies]
-ai-sandbox = "0.1.2"
+ai-sandbox = "0.1.3"
 ```
 
 ## Testing
@@ -62,7 +62,7 @@ cargo build --release
 ```toml
 # Cargo.toml
 [dependencies]
-ai-sandbox = "0.1.2"
+ai-sandbox = "0.1.3"
 ```
 
 ### Step 2: Basic Usage Example
