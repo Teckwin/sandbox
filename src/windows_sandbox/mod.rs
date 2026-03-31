@@ -36,6 +36,18 @@ pub enum WindowsSandboxLevel {
     Full,
 }
 
+impl WindowsSandboxLevel {
+    /// Convert sandbox level to string
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WindowsSandboxLevel::Disabled => "disabled",
+            WindowsSandboxLevel::Basic => "basic",
+            WindowsSandboxLevel::Strict => "strict",
+            WindowsSandboxLevel::Full => "full",
+        }
+    }
+}
+
 /// Sandbox policy for Windows
 #[derive(Clone, Debug, Default)]
 pub struct WindowsSandboxPolicy {
