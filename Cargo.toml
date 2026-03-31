@@ -7,7 +7,7 @@ authors = ["AI Sandbox Team"]
 description = "Cross-platform AI tool sandbox security implementation"
 repository = "https://github.com/Teckwin/sandbox"
 homepage = "https://github.com/Teckwin/sandbox"
-documentation = "https://docs.rs/ai-sandbox/0.1.1"
+documentation = "https://docs.rs/ai-sandbox/latest"
 
 [dependencies]
 libc = "0.2"
