@@ -573,7 +573,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn test_compute_allow_deny_paths_with_multiple_roots() {
         let policy = WindowsSandboxPolicy::workspace_write(vec![
             PathBuf::from("C:\\workspace"),
@@ -587,6 +586,7 @@ mod tests {
             .any(|p| p.to_string_lossy().contains("workspace")));
         assert!(allow.iter().any(|p| p.to_string_lossy().contains("data")));
     }
+
     #[test]
     fn test_windows_sandbox_policy_workspace_write() {
         let policy = WindowsSandboxPolicy::workspace_write(vec![PathBuf::from("/tmp")]);
