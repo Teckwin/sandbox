@@ -539,9 +539,10 @@ mod tests {
     #[test]
     fn test_is_windows_sandbox_available() {
         // On non-Windows platforms, this should return false
-        let result = is_windows_sandbox_available();
+        // Just call the function to ensure it compiles and returns a boolean
+        let _result = is_windows_sandbox_available();
         #[cfg(not(target_os = "windows"))]
-        assert!(!result);
+        assert!(!_result);
     }
 
     #[test]
