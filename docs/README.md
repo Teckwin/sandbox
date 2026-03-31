@@ -31,7 +31,7 @@ A Rust crate providing cross-platform sandbox isolation for AI agent tools.
 ```toml
 # Cargo.toml
 [dependencies]
-ai-sandbox = "0.1.5"
+ai-sandbox = "0.1.6"
 ```
 
 ## Quick Start
