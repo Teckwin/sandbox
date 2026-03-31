@@ -176,4 +176,80 @@ mod tests {
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].as_os_str(), ld_test_var);
     }
+
+    // ============================================================================
+    // 破坏性测试 - 进程加固验证
+    // ============================================================================
+
+    #[test]
+    fn test_env_filter_ld_preload() {
+        // 测试 LD_PRELOAD 过滤
+        let vars = vec![
+            (OsString::from("PATH"), OsString::from("/usr/bin")),
+            (
+                OsString::from("LD_PRELOAD"),
+                OsString::from("/tmp/malicious.so"),
+            ),
+            (OsString::from("LD_LIBRARY_PATH"), OsString::from("/tmp")),
+            (OsString::from("LD_DEBUG"), OsString::from("all")),
+            (OsString::from("LD_AUDIT"), OsString::from("/tmp/audit.so")),
+        ];
+
+        let keys = env_keys_with_prefix(vars, b"LD_");
+        // 应该过滤掉所有 LD_* 变量
+        assert!(keys.len() >= 4, "Should filter LD_* variables");
+    }
+
+    #[test]
+    fn test_env_filter_dyld() {
+        // 测试 DYLD_* 过滤 (macOS)
+        #[cfg(target_os = "macos")]
+        {
+            let vars = vec![
+                (OsString::from("PATH"), OsString::from("/usr/bin")),
+                (
+                    OsString::from("DYLD_INSERT_LIBRARIES"),
+                    OsString::from("/tmp/malicious.dylib"),
+                ),
+                (OsString::from("DYLD_LIBRARY_PATH"), OsString::from("/tmp")),
+                (
+                    OsString::from("DYLD_FRAMEWORK_PATH"),
+                    OsString::from("/tmp"),
+                ),
+            ];
+
+            let keys = env_keys_with_prefix(vars, b"DYLD_");
+            assert!(keys.len() >= 3, "Should filter DYLD_* variables on macOS");
+        }
+    }
+
+    #[test]
+    fn test_env_filter_case_sensitivity() {
+        // 测试大小写敏感性 - ld_ 不应该被匹配
+        let vars = vec![
+            (OsString::from("PATH"), OsString::from("/usr/bin")),
+            (
+                OsString::from("ld_preload"),
+                OsString::from("/tmp/malicious.so"),
+            ),
+            (
+                OsString::from("Ld_Preload"),
+                OsString::from("/tmp/malicious.so"),
+            ),
+        ];
+
+        let keys = env_keys_with_prefix(vars, b"LD_");
+        // 只有大写的 LD_ 才会被匹配
+        assert_eq!(keys.len(), 0, "Should be case-sensitive");
+    }
+
+    #[test]
+    fn test_env_filter_empty_prefix() {
+        // 测试空前缀
+        let vars = vec![(OsString::from("PATH"), OsString::from("/usr/bin"))];
+
+        let keys = env_keys_with_prefix(vars, b"");
+        // 空前缀应该返回所有键
+        assert!(!keys.is_empty());
+    }
 }

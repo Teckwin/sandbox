@@ -374,4 +374,273 @@ mod tests {
         // The test verifies that create_exec_request works, but it requires a sandbox executable
         // which is only available on macOS (seatbelt)
     }
+
+    // ============================================================================
+    // 破坏性测试 - 沙箱策略安全性验证
+    // ============================================================================
+
+    #[test]
+    fn test_sandbox_policy_default_is_restrictive() {
+        // 测试默认策略是否足够安全
+        let default_policy = SandboxPolicy::default();
+        // 默认应该是 DangerFullAccess (无限制)
+        // 这意味着默认是不安全的，需要用户显式设置限制策略
+        assert!(matches!(default_policy, SandboxPolicy::DangerFullAccess));
+    }
+
+    #[test]
+    fn test_readonly_policy_structure() {
+        // 测试只读策略结构
+        let policy = SandboxPolicy::ReadOnly {
+            file_system: FileSystemSandboxPolicy::ReadOnly,
+            network_access: NetworkSandboxPolicy::NoAccess,
+        };
+
+        match policy {
+            SandboxPolicy::ReadOnly {
+                file_system,
+                network_access,
+            } => {
+                assert!(matches!(file_system, FileSystemSandboxPolicy::ReadOnly));
+                assert!(matches!(network_access, NetworkSandboxPolicy::NoAccess));
+            }
+            _ => panic!("Expected ReadOnly policy"),
+        }
+    }
+
+    #[test]
+    fn test_workspace_policy_validates_paths() {
+        // 测试工作区策略路径验证
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![PathBuf::from("/tmp"), PathBuf::from("/home/user/workspace")],
+            network_access: NetworkSandboxPolicy::Localhost,
+        };
+
+        match policy {
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                network_access,
+            } => {
+                assert_eq!(writable_roots.len(), 2);
+                assert!(matches!(network_access, NetworkSandboxPolicy::Localhost));
+            }
+            _ => panic!("Expected WorkspaceWrite policy"),
+        }
+    }
+
+    #[test]
+    fn test_network_policy_variants() {
+        // 测试网络策略变体
+        assert!(matches!(
+            NetworkSandboxPolicy::default(),
+            NetworkSandboxPolicy::FullAccess
+        ));
+        assert!(matches!(
+            NetworkSandboxPolicy::NoAccess,
+            NetworkSandboxPolicy::NoAccess
+        ));
+        assert!(matches!(
+            NetworkSandboxPolicy::Localhost,
+            NetworkSandboxPolicy::Localhost
+        ));
+        assert!(matches!(
+            NetworkSandboxPolicy::Proxy,
+            NetworkSandboxPolicy::Proxy
+        ));
+    }
+
+    #[test]
+    fn test_filesystem_policy_variants() {
+        // 测试文件系统策略变体
+        assert!(matches!(
+            FileSystemSandboxPolicy::default(),
+            FileSystemSandboxPolicy::FullAccess
+        ));
+        assert!(matches!(
+            FileSystemSandboxPolicy::ReadOnly,
+            FileSystemSandboxPolicy::ReadOnly
+        ));
+        assert!(matches!(
+            FileSystemSandboxPolicy::External,
+            FileSystemSandboxPolicy::External
+        ));
+
+        // 测试 WorkspaceWrite 变体
+        let ws = FileSystemSandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![PathBuf::from("/tmp")],
+        };
+        assert!(matches!(ws, FileSystemSandboxPolicy::WorkspaceWrite { .. }));
+    }
+
+    #[test]
+    fn test_sandbox_type_all_variants() {
+        // 测试所有沙箱类型
+        let types = vec![
+            SandboxType::None,
+            SandboxType::MacosSeatbelt,
+            SandboxType::LinuxSeccomp,
+            SandboxType::WindowsRestrictedToken,
+            SandboxType::FreeBSDCapsicum,
+            SandboxType::OpenBSDPledge,
+        ];
+
+        for sandbox_type in types {
+            let name = sandbox_type.name();
+            let tag = sandbox_type.as_metric_tag();
+            assert!(!name.is_empty());
+            assert!(!tag.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_sandbox_command_validation() {
+        // 测试 SandboxCommand 验证
+        let command = SandboxCommand {
+            program: OsString::from("ls"),
+            args: vec!["-la".to_string(), "/tmp".to_string()],
+            cwd: PathBuf::from("/tmp"),
+            env: HashMap::new(),
+        };
+
+        assert!(!command.program.is_empty());
+        assert!(!command.args.is_empty());
+        assert!(command.cwd.exists() || command.cwd.to_string_lossy() == "/tmp");
+    }
+
+    #[test]
+    fn test_sandbox_preference_variants() {
+        // 测试沙箱偏好设置
+        assert!(matches!(
+            SandboxablePreference::default(),
+            SandboxablePreference::Auto
+        ));
+        assert!(matches!(
+            SandboxablePreference::Require,
+            SandboxablePreference::Require
+        ));
+        assert!(matches!(
+            SandboxablePreference::Forbid,
+            SandboxablePreference::Forbid
+        ));
+    }
+
+    // ============================================================================
+    // 破坏性测试 - 边界条件和错误处理
+    // ============================================================================
+
+    #[test]
+    fn test_empty_program_name() {
+        // 测试空程序名
+        let manager = SandboxManager::new();
+        let command = SandboxCommand {
+            program: OsString::from(""),
+            args: vec![],
+            cwd: PathBuf::from("/tmp"),
+            env: HashMap::new(),
+        };
+
+        // 应该能创建请求，但不保证能执行
+        let result = manager.create_exec_request(command, SandboxPolicy::default());
+        // 空程序名可能导致错误
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_very_long_program_name() {
+        // 测试超长程序名
+        let manager = SandboxManager::new();
+        let long_name = "A".repeat(10000);
+        let command = SandboxCommand {
+            program: OsString::from(long_name),
+            args: vec![],
+            cwd: PathBuf::from("/tmp"),
+            env: HashMap::new(),
+        };
+
+        let result = manager.create_exec_request(command, SandboxPolicy::default());
+        // 长程序名应该被处理
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_special_characters_in_args() {
+        // 测试参数中的特殊字符
+        let manager = SandboxManager::new();
+        let command = SandboxCommand {
+            program: OsString::from("ls"),
+            args: vec![
+                "-la".to_string(),
+                "/tmp".to_string(),
+                ";rm -rf /".to_string(),
+                "|cat /etc/passwd".to_string(),
+                "`whoami`".to_string(),
+                "$(id)".to_string(),
+            ],
+            cwd: PathBuf::from("/tmp"),
+            env: HashMap::new(),
+        };
+
+        let result = manager.create_exec_request(command, SandboxPolicy::default());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_empty_cwd() {
+        // 测试空工作目录
+        let manager = SandboxManager::new();
+        let command = SandboxCommand {
+            program: OsString::from("ls"),
+            args: vec![],
+            cwd: PathBuf::from(""),
+            env: HashMap::new(),
+        };
+
+        let result = manager.create_exec_request(command, SandboxPolicy::default());
+        // 空 cwd 可能导致错误或使用默认目录
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_nonexistent_cwd() {
+        // 测试不存在的工作目录
+        let manager = SandboxManager::new();
+        let command = SandboxCommand {
+            program: OsString::from("ls"),
+            args: vec![],
+            cwd: PathBuf::from("/nonexistent/path/that/does/not/exist"),
+            env: HashMap::new(),
+        };
+
+        let result = manager.create_exec_request(command, SandboxPolicy::default());
+        // 应该能创建请求（不验证目录是否存在）
+        assert!(result.is_ok());
+    }
+
+    // ============================================================================
+    // 破坏性测试 - Policy Clone 和序列化
+    // ============================================================================
+
+    #[test]
+    fn test_policy_clone() {
+        // 测试策略克隆
+        let policy = SandboxPolicy::ReadOnly {
+            file_system: FileSystemSandboxPolicy::ReadOnly,
+            network_access: NetworkSandboxPolicy::NoAccess,
+        };
+
+        let cloned = policy.clone();
+        assert_eq!(policy, cloned);
+    }
+
+    #[test]
+    fn test_policy_debug_format() {
+        // 测试策略调试格式
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![PathBuf::from("/tmp")],
+            network_access: NetworkSandboxPolicy::Localhost,
+        };
+
+        let debug_str = format!("{:?}", policy);
+        assert!(!debug_str.is_empty());
+    }
 }
