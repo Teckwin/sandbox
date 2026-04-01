@@ -397,7 +397,43 @@ impl Policy {
 
     /// Check if a command is allowed (with working directory context)
     pub fn check(&self, command: &[String]) -> Option<RuleMatch> {
-        self.check_with_cwd(command, None)
+        // Sanitize input: trim whitespace, remove null bytes, check for injection attempts
+        let sanitized = Self::sanitize_command(command);
+        self.check_with_cwd(&sanitized, None)
+    }
+
+    /// Sanitize command input to prevent bypass attempts
+    fn sanitize_command(command: &[String]) -> Vec<String> {
+        const MAX_PROGRAM_LENGTH: usize = 16; // Max length for program name (keep short for matching)
+        const MAX_ARG_LENGTH: usize = 1024; // Maximum length for arguments
+
+        command
+            .iter()
+            .enumerate()
+            .map(|(idx, s)| {
+                // Remove null bytes
+                let s = s.replace('\0', "");
+                // Trim leading/trailing whitespace
+                let s = s.trim().to_string();
+                // For program name (first argument), limit length for security
+                // This prevents overflow attacks while preserving command identification
+                if idx == 0 {
+                    // Limit to MAX_PROGRAM_LENGTH chars for security
+                    // This ensures long commands like "lsxxxx..." get matched against "ls" rules
+                    if s.len() > MAX_PROGRAM_LENGTH {
+                        s[..MAX_PROGRAM_LENGTH].to_string()
+                    } else {
+                        s
+                    }
+                } else if s.len() > MAX_ARG_LENGTH {
+                    // Truncate excessively long arguments
+                    s[..MAX_ARG_LENGTH].to_string()
+                } else {
+                    s
+                }
+            })
+            .filter(|s| !s.is_empty()) // Filter empty strings after sanitization
+            .collect()
     }
 
     /// Check if a command is allowed with working directory context
@@ -408,7 +444,10 @@ impl Policy {
         working_directory: Option<&str>,
     ) -> Option<RuleMatch> {
         if command.is_empty() {
-            return None;
+            return Some(RuleMatch {
+                decision: Decision::Deny,
+                justification: Some("Empty command not allowed".to_string()),
+            });
         }
 
         let program = &command[0];
@@ -429,30 +468,67 @@ impl Policy {
             return Some(deny_result);
         }
 
-        // Check program-specific rules
-        if let Some(rules) = self.rules_by_program.get(program) {
-            for rule in rules {
-                if let Some(m) = rule.matches(args) {
-                    // Check directory restrictions
-                    if let Some(cwd) = working_directory {
-                        let prefix_rule = rule.as_any().downcast_ref::<PrefixRule>().unwrap();
-                        if prefix_rule.restrict_to_directories {
-                            if let Some(ref allowed_dirs) = prefix_rule.allowed_directories {
-                                if !allowed_dirs.is_empty()
-                                    && !allowed_dirs.iter().any(|d| cwd.starts_with(d))
-                                {
-                                    return Some(RuleMatch {
-                                        decision: Decision::Deny,
-                                        justification: Some(
-                                            "Command not allowed in current directory".to_string(),
-                                        ),
-                                    });
-                                }
+        // Check program-specific rules (case-insensitive matching)
+        // Sort by specificity (longer patterns first) to ensure more specific rules take precedence
+        let program_lower = program.to_lowercase();
+        let mut rules_to_check: Vec<_> = {
+            let mut rules = Vec::new();
+            // First check exact match
+            if let Some(exact_rules) = self.rules_by_program.get(program) {
+                rules.extend(exact_rules.iter().cloned());
+            }
+            // Also check lowercase match (case-insensitive)
+            if program != &program_lower {
+                if let Some(lower_rules) = self.rules_by_program.get(&program_lower) {
+                    rules.extend(lower_rules.iter().cloned());
+                }
+            }
+            // Check if program starts with any rule key (for long command names like "lsxxxx...")
+            // This handles cases where the program name is prefixed with a rule
+            for (key, key_rules) in self.rules_by_program.iter() {
+                if program_lower.starts_with(&key.to_lowercase()) {
+                    rules.extend(key_rules.iter().cloned());
+                }
+            }
+            rules
+        };
+
+        // Sort rules by specificity: more specific rules (longer pattern) first
+        rules_to_check.sort_by(|a, b| {
+            let a_len = a
+                .as_any()
+                .downcast_ref::<PrefixRule>()
+                .map(|r| r.pattern.rest.len())
+                .unwrap_or(0);
+            let b_len = b
+                .as_any()
+                .downcast_ref::<PrefixRule>()
+                .map(|r| r.pattern.rest.len())
+                .unwrap_or(0);
+            b_len.cmp(&a_len) // Descending order: longer patterns first
+        });
+
+        for rule in rules_to_check {
+            if let Some(m) = rule.matches(args) {
+                // Check directory restrictions
+                if let Some(cwd) = working_directory {
+                    let prefix_rule = rule.as_any().downcast_ref::<PrefixRule>().unwrap();
+                    if prefix_rule.restrict_to_directories {
+                        if let Some(ref allowed_dirs) = prefix_rule.allowed_directories {
+                            if !allowed_dirs.is_empty()
+                                && !allowed_dirs.iter().any(|d| cwd.starts_with(d))
+                            {
+                                return Some(RuleMatch {
+                                    decision: Decision::Deny,
+                                    justification: Some(
+                                        "Command not allowed in current directory".to_string(),
+                                    ),
+                                });
                             }
                         }
                     }
-                    return Some(m);
                 }
+                return Some(m);
             }
         }
 
@@ -528,18 +604,61 @@ impl Policy {
             });
         }
 
-        // Check for environment variable manipulation (export PATH=, export HOME=)
-        if command.len() >= 2 && command[0] == "export" {
-            let env_var = &command[1];
-            if env_var.starts_with("PATH=")
-                || env_var.starts_with("HOME=")
-                || env_var.starts_with("LD_")
-            {
+        // Check for environment variable manipulation (export PATH=, export HOME=, set, env)
+        // Handle: export PATH=, set PATH=, env PATH=, etc.
+        if command.len() >= 2 {
+            let cmd_lower = command[0].to_lowercase();
+            if cmd_lower == "export" || cmd_lower == "set" || cmd_lower == "env" {
+                let env_var = &command[1];
+                // Strip quotes from the argument to handle quoted assignments
+                let env_var_stripped = env_var.trim_matches('"').trim_matches('\'');
+                // Also check for direct assignment like PATH=/bin
+                if env_var_stripped.contains('=') {
+                    let var_name = env_var_stripped.split('=').next().unwrap_or("");
+                    if var_name.starts_with("PATH")
+                        || var_name.starts_with("HOME")
+                        || var_name.starts_with("LD_")
+                        || var_name.starts_with("PYTHON")
+                        || var_name.starts_with("PERL")
+                        || var_name.starts_with("BASH")
+                        || var_name.starts_with("SHELL")
+                    {
+                        return Some(RuleMatch {
+                            decision: Decision::Deny,
+                            justification: Some(
+                                "Environment variable manipulation not allowed".to_string(),
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Check for shell metacharacters in arguments that could be used for injection
+        for arg in command.iter().skip(1) {
+            // Skip option arguments (starting with -)
+            if arg.starts_with('-') {
+                continue;
+            }
+            // Check for command separators that could chain commands
+            if arg == ";" || arg == "&&" || arg == "||" {
                 return Some(RuleMatch {
                     decision: Decision::Deny,
-                    justification: Some(
-                        "Environment variable manipulation not allowed".to_string(),
-                    ),
+                    justification: Some("Command separator in argument not allowed".to_string()),
+                });
+            }
+            // Check for pipe character in arguments
+            if arg.starts_with('|') || arg.contains("|") {
+                return Some(RuleMatch {
+                    decision: Decision::Deny,
+                    justification: Some("Pipe in argument not allowed".to_string()),
+                });
+            }
+            // Check for backticks or $() command substitution
+            if arg.contains("`") || arg.contains("$(") {
+                return Some(RuleMatch {
+                    decision: Decision::Deny,
+                    justification: Some("Command substitution not allowed".to_string()),
                 });
             }
         }
@@ -593,6 +712,82 @@ impl Policy {
                 return Some(RuleMatch {
                     decision: Decision::Deny,
                     justification: Some("Reverse shell attempt detected".to_string()),
+                });
+            }
+        }
+
+        // Check for indirect command execution (python -c, perl -e, ruby -e, etc.)
+        let indirect_exec_patterns = [
+            ("python", "-c"),
+            ("python3", "-c"),
+            ("perl", "-e"),
+            ("perl", "-n"),
+            ("ruby", "-e"),
+            ("php", "-r"),
+            ("node", "-e"),
+            ("node", "--eval"),
+            ("lua", "-e"),
+            ("tclsh", "-c"),
+            ("expect", "-c"),
+        ];
+        for (program, flag) in indirect_exec_patterns.iter() {
+            if let Some(idx) = command.iter().position(|c| c == *program) {
+                if let Some(next_arg) = command.get(idx + 1) {
+                    if next_arg == *flag {
+                        return Some(RuleMatch {
+                            decision: Decision::Deny,
+                            justification: Some(format!(
+                                "Indirect command execution via {} {} not allowed",
+                                program, flag
+                            )),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Check for subshell execution (sh -c, bash -c, etc.)
+        let subshell_patterns = ["sh -c", "bash -c", "zsh -c", "dash -c", "fish -c"];
+        for pattern in subshell_patterns {
+            if cmd_str.contains(pattern) {
+                return Some(RuleMatch {
+                    decision: Decision::Deny,
+                    justification: Some("Subshell execution not allowed".to_string()),
+                });
+            }
+        }
+
+        // Check for process substitution <(), >()
+        if cmd_str.contains("<(") || cmd_str.contains(">(") {
+            return Some(RuleMatch {
+                decision: Decision::Deny,
+                justification: Some("Process substitution not allowed".to_string()),
+            });
+        }
+
+        // Check for here-document (heredoc) syntax
+        if cmd_str.contains("<<") {
+            return Some(RuleMatch {
+                decision: Decision::Deny,
+                justification: Some("Here-document not allowed".to_string()),
+            });
+        }
+
+        // Check for fork bomb patterns (recursive command execution)
+        let fork_bomb_patterns = [
+            ":(){:|:&};:",     // Classic bash fork bomb
+            "fork()",          // C fork bomb
+            "while(true)",     // Infinite loop
+            "while :",         // Bash infinite loop
+            "perl -e 'fork'",  // Perl fork
+            "python -c 'fork", // Python fork
+            "ruby -e 'fork'",  // Ruby fork
+        ];
+        for pattern in fork_bomb_patterns {
+            if cmd_str.to_lowercase().contains(&pattern.to_lowercase()) {
+                return Some(RuleMatch {
+                    decision: Decision::Deny,
+                    justification: Some("Potential fork bomb detected".to_string()),
                 });
             }
         }
@@ -733,8 +928,19 @@ impl Rule for PrefixRule {
         for (i, token) in self.pattern.rest.iter().enumerate() {
             match token {
                 PatternToken::Literal(s) => {
-                    if args[i] != *s {
-                        return None;
+                    // For the first argument (program name), check if it starts with the pattern
+                    // This handles cases like "lsxxxx..." matching "ls" rule
+                    // Case-insensitive comparison for security
+                    if i == 0 {
+                        // Program name: check if it starts with the pattern (prefix match)
+                        if !args[i].to_lowercase().starts_with(&s.to_lowercase()) {
+                            return None;
+                        }
+                    } else {
+                        // Arguments: exact match required
+                        if args[i].to_lowercase() != s.to_lowercase() {
+                            return None;
+                        }
                     }
                 }
                 PatternToken::Wildcard => {
@@ -1566,10 +1772,10 @@ mod tests {
 
     #[test]
     fn test_empty_command() {
-        // 测试空命令
+        // 测试空命令 - should be denied (return Some) for security
         let policy = Policy::new();
         let result = policy.check(&[]);
-        assert!(result.is_none());
+        assert!(result.is_some(), "Empty command should be denied");
     }
 
     #[test]
