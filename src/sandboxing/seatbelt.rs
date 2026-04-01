@@ -35,7 +35,20 @@ const MACOS_RESTRICTED_READ_ONLY_POLICY: &str = r#"
 "#;
 
 fn is_loopback_host(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
+    let host_lower = host.to_lowercase();
+    // Check standard localhost variants
+    host_lower == "localhost"
+        || host == "127.0.0.1"
+        || host == "::1"
+        // Check IPv6 localhost variants
+        || host_lower == "localhost6"
+        || host_lower == "ip6-localhost"
+        // Check IPv4 loopback (127.0.0.0/8)
+        || host.starts_with("127.")
+        // Check IPv6 loopback variants
+        || host == "0:0:0:0:0:0:0:1"
+        || host == "0:0:0:0:0:0:0:0"
+        || host.contains("::1")
 }
 
 fn proxy_scheme_default_port(scheme: &str) -> u16 {
