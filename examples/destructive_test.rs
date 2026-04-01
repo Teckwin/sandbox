@@ -32,7 +32,7 @@ impl TestResult {
 /// Returns true if the attack was BLOCKED (secure), false if it succeeded (vulnerable)
 fn is_attack_blocked(result: &Option<ai_sandbox::execpolicy::RuleMatch>) -> bool {
     match result {
-        None => false, // No rule matched = bypass (vulnerable)
+        None => false,                             // No rule matched = bypass (vulnerable)
         Some(rm) => rm.decision == Decision::Deny, // Denied = blocked (secure)
     }
 }
@@ -213,8 +213,16 @@ fn main() {
 
 fn test_case_sensitivity_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["cat".to_string()], Decision::Allow, None).unwrap();
-    policy.add_prefix_rule(&["cat".to_string(), "/etc/passwd".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["cat".to_string()], Decision::Allow, None)
+        .unwrap();
+    policy
+        .add_prefix_rule(
+            &["cat".to_string(), "/etc/passwd".to_string()],
+            Decision::Deny,
+            None,
+        )
+        .unwrap();
 
     // Try uppercase - with case-insensitive matching, this should match and be denied
     let result = policy.check(&["CAT".to_string(), "/etc/passwd".to_string()]);
@@ -233,7 +241,9 @@ fn test_case_sensitivity_bypass() -> TestResult {
 
 fn test_whitespace_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["rm".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["rm".to_string()], Decision::Deny, None)
+        .unwrap();
 
     // Try with leading whitespace - sanitization should trim it and block
     let result = policy.check(&[" rm".to_string()]);
@@ -268,7 +278,9 @@ fn test_empty_command_bypass() -> TestResult {
 
 fn test_very_long_command_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["ls".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["ls".to_string()], Decision::Deny, None)
+        .unwrap();
 
     // Create a very long "ls" that might overflow - sanitization should handle it
     // Use "ls" prefix to match the rule after sanitization
@@ -289,7 +301,9 @@ fn test_very_long_command_bypass() -> TestResult {
 
 fn test_multiple_spaces_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["ls".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["ls".to_string()], Decision::Deny, None)
+        .unwrap();
 
     // Try with multiple spaces - sanitization should handle it
     let result = policy.check(&["ls".to_string(), " ".to_string()]);
@@ -308,8 +322,16 @@ fn test_multiple_spaces_bypass() -> TestResult {
 
 fn test_null_byte_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["cat".to_string()], Decision::Allow, None).unwrap();
-    policy.add_prefix_rule(&["cat".to_string(), "/etc/passwd".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["cat".to_string()], Decision::Allow, None)
+        .unwrap();
+    policy
+        .add_prefix_rule(
+            &["cat".to_string(), "/etc/passwd".to_string()],
+            Decision::Deny,
+            None,
+        )
+        .unwrap();
 
     // Null byte in path
     let result = policy.check(&["cat".to_string(), "/etc/pass\x00wd".to_string()]);
@@ -327,8 +349,16 @@ fn test_null_byte_bypass() -> TestResult {
 
 fn test_unicode_homoglyph_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["cat".to_string()], Decision::Allow, None).unwrap();
-    policy.add_prefix_rule(&["cat".to_string(), "/etc/passwd".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["cat".to_string()], Decision::Allow, None)
+        .unwrap();
+    policy
+        .add_prefix_rule(
+            &["cat".to_string(), "/etc/passwd".to_string()],
+            Decision::Deny,
+            None,
+        )
+        .unwrap();
 
     // Cyrillic 'a' looks like Latin 'a'
     let result = policy.check(&["cat".to_string(), "/еtc/passwd".to_string()]); // Cyrillic 'е'
@@ -346,7 +376,9 @@ fn test_unicode_homoglyph_bypass() -> TestResult {
 
 fn test_alternative_separator_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["curl".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["curl".to_string()], Decision::Deny, None)
+        .unwrap();
 
     // Try different separators
     let result = policy.check(&["curl".to_string(), "http://evil.com".to_string()]);
@@ -364,7 +396,9 @@ fn test_alternative_separator_bypass() -> TestResult {
 
 fn test_newline_injection_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["ls".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["ls".to_string()], Decision::Deny, None)
+        .unwrap();
 
     let result = policy.check(&["ls\n".to_string()]);
     let blocked = is_attack_blocked(&result);
@@ -382,7 +416,9 @@ fn test_newline_injection_bypass() -> TestResult {
 
 fn test_tab_injection_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["ls".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["ls".to_string()], Decision::Deny, None)
+        .unwrap();
 
     let result = policy.check(&["ls\t".to_string()]);
     let blocked = is_attack_blocked(&result);
@@ -404,8 +440,16 @@ fn test_tab_injection_bypass() -> TestResult {
 
 fn test_double_url_encoding_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["cat".to_string()], Decision::Allow, None).unwrap();
-    policy.add_prefix_rule(&["cat".to_string(), "/etc/passwd".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["cat".to_string()], Decision::Allow, None)
+        .unwrap();
+    policy
+        .add_prefix_rule(
+            &["cat".to_string(), "/etc/passwd".to_string()],
+            Decision::Deny,
+            None,
+        )
+        .unwrap();
 
     // Double URL encode: %252e = .
     let result = policy.check(&["cat".to_string(), "%252e%252e%252fetc/passwd".to_string()]);
@@ -423,8 +467,16 @@ fn test_double_url_encoding_bypass() -> TestResult {
 
 fn test_unicode_fullwidth_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["ls".to_string()], Decision::Allow, None).unwrap();
-    policy.add_prefix_rule(&["ls".to_string(), "/root".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["ls".to_string()], Decision::Allow, None)
+        .unwrap();
+    policy
+        .add_prefix_rule(
+            &["ls".to_string(), "/root".to_string()],
+            Decision::Deny,
+            None,
+        )
+        .unwrap();
 
     // Fullwidth slash (U+FF0F)
     let result = policy.check(&["ls".to_string(), "/root\u{FF0F}..".to_string()]);
@@ -442,8 +494,16 @@ fn test_unicode_fullwidth_bypass() -> TestResult {
 
 fn test_mixed_case_path_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["cat".to_string()], Decision::Allow, None).unwrap();
-    policy.add_prefix_rule(&["cat".to_string(), "/etc/passwd".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["cat".to_string()], Decision::Allow, None)
+        .unwrap();
+    policy
+        .add_prefix_rule(
+            &["cat".to_string(), "/etc/passwd".to_string()],
+            Decision::Deny,
+            None,
+        )
+        .unwrap();
 
     let result = policy.check(&["cat".to_string(), "/ETC/PASSWD".to_string()]);
 
@@ -460,7 +520,9 @@ fn test_mixed_case_path_bypass() -> TestResult {
 
 fn test_symlink_traversal_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["cat".to_string()], Decision::Allow, None).unwrap();
+    policy
+        .add_prefix_rule(&["cat".to_string()], Decision::Allow, None)
+        .unwrap();
 
     // This test checks if the policy handles symlink-style paths
     let result = policy.check(&["cat".to_string(), "symlink_to_etc".to_string()]);
@@ -474,8 +536,16 @@ fn test_symlink_traversal_bypass() -> TestResult {
 
 fn test_null_terminated_path_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["cat".to_string()], Decision::Allow, None).unwrap();
-    policy.add_prefix_rule(&["cat".to_string(), "/etc/passwd".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["cat".to_string()], Decision::Allow, None)
+        .unwrap();
+    policy
+        .add_prefix_rule(
+            &["cat".to_string(), "/etc/passwd".to_string()],
+            Decision::Deny,
+            None,
+        )
+        .unwrap();
 
     let result = policy.check(&["cat".to_string(), "/etc/passwd\x00".to_string()]);
 
@@ -546,7 +616,11 @@ fn test_quoted_env_bypass() -> TestResult {
 fn test_multiple_env_bypass() -> TestResult {
     let policy = Policy::new();
     // Try multiple env manipulations in one command
-    let result = policy.check(&["bash".to_string(), "-c".to_string(), "export A=1;export B=2;cat /etc/passwd".to_string()]);
+    let result = policy.check(&[
+        "bash".to_string(),
+        "-c".to_string(),
+        "export A=1;export B=2;cat /etc/passwd".to_string(),
+    ]);
 
     TestResult::new(
         "Multiple Env Bypass",
@@ -667,7 +741,9 @@ fn test_special_char_path_bypass() -> TestResult {
 
 fn test_wildcard_exploitation() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["ls".to_string(), "*".to_string()], Decision::Allow, None).unwrap();
+    policy
+        .add_prefix_rule(&["ls".to_string(), "*".to_string()], Decision::Allow, None)
+        .unwrap();
 
     // Does wildcard also match subdirectories?
     let result = policy.check(&["ls".to_string(), "subdir".to_string()]);
@@ -687,9 +763,17 @@ fn test_wildcard_exploitation() -> TestResult {
 fn test_priority_inversion() -> TestResult {
     let mut policy = Policy::new();
     // Add deny rule first
-    policy.add_prefix_rule(&["cat".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["cat".to_string()], Decision::Deny, None)
+        .unwrap();
     // Then add allow rule
-    policy.add_prefix_rule(&["cat".to_string(), "/tmp/file.txt".to_string()], Decision::Allow, None).unwrap();
+    policy
+        .add_prefix_rule(
+            &["cat".to_string(), "/tmp/file.txt".to_string()],
+            Decision::Allow,
+            None,
+        )
+        .unwrap();
 
     let result = policy.check(&["cat".to_string(), "/tmp/file.txt".to_string()]);
     let blocked = is_attack_blocked(&result);
@@ -707,8 +791,16 @@ fn test_priority_inversion() -> TestResult {
 
 fn test_regex_pattern_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["cat".to_string()], Decision::Allow, None).unwrap();
-    policy.add_prefix_rule(&["cat".to_string(), "file.txt".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["cat".to_string()], Decision::Allow, None)
+        .unwrap();
+    policy
+        .add_prefix_rule(
+            &["cat".to_string(), "file.txt".to_string()],
+            Decision::Deny,
+            None,
+        )
+        .unwrap();
 
     // Try regex-like patterns
     let result = policy.check(&["cat".to_string(), "file.tx".to_string()]);
@@ -726,7 +818,9 @@ fn test_regex_pattern_bypass() -> TestResult {
 
 fn test_empty_arglist_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["ls".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["ls".to_string()], Decision::Deny, None)
+        .unwrap();
 
     // Try with empty args
     let result = policy.check(&["ls".to_string()]);
@@ -766,17 +860,22 @@ fn test_whitelist_mode_bypass() -> TestResult {
 
 fn test_directory_restriction_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule_ext(
-        &["cat".to_string()],
-        Decision::Allow,
-        None,
-        RuleType::Whitelist,
-        Some(vec!["/tmp".to_string()]),
-        true,
-    ).unwrap();
+    policy
+        .add_prefix_rule_ext(
+            &["cat".to_string()],
+            Decision::Allow,
+            None,
+            RuleType::Whitelist,
+            Some(vec!["/tmp".to_string()]),
+            true,
+        )
+        .unwrap();
 
     // Try to access file outside allowed directory without cwd
-    let result = policy.check_with_cwd(&["cat".to_string(), "/etc/passwd".to_string()], Some("/tmp"));
+    let result = policy.check_with_cwd(
+        &["cat".to_string(), "/etc/passwd".to_string()],
+        Some("/tmp"),
+    );
 
     TestResult::new(
         "Directory Restriction Bypass",
@@ -792,10 +891,19 @@ fn test_directory_restriction_bypass() -> TestResult {
 fn test_shell_escape_allowed_command() -> TestResult {
     let mut policy = Policy::new();
     // Allow find command
-    policy.add_prefix_rule(&["find".to_string()], Decision::Allow, None).unwrap();
+    policy
+        .add_prefix_rule(&["find".to_string()], Decision::Allow, None)
+        .unwrap();
 
     // Try shell escape via find -exec
-    let result = policy.check(&["find".to_string(), "/tmp".to_string(), "-exec".to_string(), "cat".to_string(), "/etc/passwd".to_string(), ";".to_string()]);
+    let result = policy.check(&[
+        "find".to_string(),
+        "/tmp".to_string(),
+        "-exec".to_string(),
+        "cat".to_string(),
+        "/etc/passwd".to_string(),
+        ";".to_string(),
+    ]);
 
     TestResult::new(
         "Shell Escape via Allowed Command",
@@ -810,8 +918,16 @@ fn test_shell_escape_allowed_command() -> TestResult {
 
 fn test_path_normalization_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["cat".to_string()], Decision::Allow, None).unwrap();
-    policy.add_prefix_rule(&["cat".to_string(), "/etc/passwd".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["cat".to_string()], Decision::Allow, None)
+        .unwrap();
+    policy
+        .add_prefix_rule(
+            &["cat".to_string(), "/etc/passwd".to_string()],
+            Decision::Deny,
+            None,
+        )
+        .unwrap();
 
     // Try various path normalizations
     let paths = vec![
@@ -860,10 +976,16 @@ fn test_set_command_bypass() -> TestResult {
 
 fn test_indirect_command_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["python3".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["python3".to_string()], Decision::Deny, None)
+        .unwrap();
 
     // Try using python with -c to execute shell
-    let result = policy.check(&["python3".to_string(), "-c".to_string(), "import os; os.system('cat /etc/passwd')".to_string()]);
+    let result = policy.check(&[
+        "python3".to_string(),
+        "-c".to_string(),
+        "import os; os.system('cat /etc/passwd')".to_string(),
+    ]);
 
     TestResult::new(
         "Indirect Command Bypass",
@@ -878,7 +1000,9 @@ fn test_indirect_command_bypass() -> TestResult {
 
 fn test_alias_expansion_bypass() -> TestResult {
     let mut policy = Policy::new();
-    policy.add_prefix_rule(&["ls".to_string()], Decision::Deny, None).unwrap();
+    policy
+        .add_prefix_rule(&["ls".to_string()], Decision::Deny, None)
+        .unwrap();
 
     // Try with alias-like syntax
     let result = policy.check(&["ls".to_string(), "--color=auto".to_string()]);
@@ -898,7 +1022,11 @@ fn test_subshell_bypass() -> TestResult {
     let policy = Policy::new();
 
     // Try subshell execution
-    let result = policy.check(&["sh".to_string(), "-c".to_string(), "cat /etc/passwd".to_string()]);
+    let result = policy.check(&[
+        "sh".to_string(),
+        "-c".to_string(),
+        "cat /etc/passwd".to_string(),
+    ]);
 
     TestResult::new(
         "Subshell Bypass",
@@ -915,7 +1043,11 @@ fn test_heredoc_bypass() -> TestResult {
     let policy = Policy::new();
 
     // Try here-document injection
-    let result = policy.check(&["sh".to_string(), "-c".to_string(), "cat <<EOF\n#!/bin/bash\ncat /etc/passwd\nEOF".to_string()]);
+    let result = policy.check(&[
+        "sh".to_string(),
+        "-c".to_string(),
+        "cat <<EOF\n#!/bin/bash\ncat /etc/passwd\nEOF".to_string(),
+    ]);
 
     TestResult::new(
         "Here-document Bypass",
@@ -932,7 +1064,11 @@ fn test_process_substitution_bypass() -> TestResult {
     let policy = Policy::new();
 
     // Try process substitution
-    let result = policy.check(&["sh".to_string(), "-c".to_string(), "cat <(cat /etc/passwd)".to_string()]);
+    let result = policy.check(&[
+        "sh".to_string(),
+        "-c".to_string(),
+        "cat <(cat /etc/passwd)".to_string(),
+    ]);
 
     TestResult::new(
         "Process Substitution Bypass",

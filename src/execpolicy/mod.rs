@@ -405,8 +405,8 @@ impl Policy {
     /// Sanitize command input to prevent bypass attempts
     fn sanitize_command(command: &[String]) -> Vec<String> {
         const MAX_PROGRAM_LENGTH: usize = 16; // Max length for program name (keep short for matching)
-        const MAX_ARG_LENGTH: usize = 1024;   // Maximum length for arguments
-        
+        const MAX_ARG_LENGTH: usize = 1024; // Maximum length for arguments
+
         command
             .iter()
             .enumerate()
@@ -495,8 +495,16 @@ impl Policy {
 
         // Sort rules by specificity: more specific rules (longer pattern) first
         rules_to_check.sort_by(|a, b| {
-            let a_len = a.as_any().downcast_ref::<PrefixRule>().map(|r| r.pattern.rest.len()).unwrap_or(0);
-            let b_len = b.as_any().downcast_ref::<PrefixRule>().map(|r| r.pattern.rest.len()).unwrap_or(0);
+            let a_len = a
+                .as_any()
+                .downcast_ref::<PrefixRule>()
+                .map(|r| r.pattern.rest.len())
+                .unwrap_or(0);
+            let b_len = b
+                .as_any()
+                .downcast_ref::<PrefixRule>()
+                .map(|r| r.pattern.rest.len())
+                .unwrap_or(0);
             b_len.cmp(&a_len) // Descending order: longer patterns first
         });
 
@@ -767,13 +775,13 @@ impl Policy {
 
         // Check for fork bomb patterns (recursive command execution)
         let fork_bomb_patterns = [
-            ":(){:|:&};:",           // Classic bash fork bomb
-            "fork()",                // C fork bomb
-            "while(true)",           // Infinite loop
-            "while :",               // Bash infinite loop
-            "perl -e 'fork'",        // Perl fork
-            "python -c 'fork",       // Python fork
-            "ruby -e 'fork'",        // Ruby fork
+            ":(){:|:&};:",     // Classic bash fork bomb
+            "fork()",          // C fork bomb
+            "while(true)",     // Infinite loop
+            "while :",         // Bash infinite loop
+            "perl -e 'fork'",  // Perl fork
+            "python -c 'fork", // Python fork
+            "ruby -e 'fork'",  // Ruby fork
         ];
         for pattern in fork_bomb_patterns {
             if cmd_str.to_lowercase().contains(&pattern.to_lowercase()) {
