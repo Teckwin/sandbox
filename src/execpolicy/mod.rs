@@ -84,6 +84,65 @@ pub struct PrefixRule {
     pub restrict_to_directories: bool,
 }
 
+/// Path rule for file/directory access control
+#[derive(Clone, Debug)]
+pub struct PathRule {
+    /// Path pattern to match (supports wildcards)
+    pub path_pattern: String,
+    /// Whether this is a file or directory rule
+    pub is_directory: bool,
+    /// Decision for this path
+    pub decision: Decision,
+    /// Optional justification
+    pub justification: Option<String>,
+    /// Rule type
+    pub rule_type: RuleType,
+}
+
+impl PathRule {
+    /// Create a new path rule
+    pub fn new(
+        path_pattern: String,
+        is_directory: bool,
+        decision: Decision,
+        justification: Option<String>,
+    ) -> Self {
+        Self {
+            path_pattern,
+            is_directory,
+            decision,
+            justification,
+            rule_type: RuleType::Blacklist,
+        }
+    }
+
+    /// Check if a path matches this rule
+    pub fn matches_path(&self, path: &str) -> bool {
+        if self.path_pattern == "*" {
+            return true;
+        }
+
+        // Simple prefix matching with wildcard support
+        if self.path_pattern.ends_with("/*") {
+            let prefix = &self.path_pattern[..self.path_pattern.len() - 2];
+            return path.starts_with(prefix);
+        }
+
+        path == self.path_pattern || path.starts_with(&format!("{}/", self.path_pattern))
+    }
+}
+
+impl Rule for PathRule {
+    fn matches(&self, _command: &[String]) -> Option<RuleMatch> {
+        // PathRule is checked separately via check_path()
+        None
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 impl PrefixRule {
     /// Create a new prefix rule with default settings
     pub fn new(pattern: PrefixPattern, decision: Decision, justification: Option<String>) -> Self {
@@ -128,6 +187,7 @@ pub struct RuleMatch {
 pub struct Policy {
     rules_by_program: HashMap<String, Vec<Arc<dyn Rule>>>,
     network_rules: Vec<NetworkRule>,
+    path_rules: Vec<PathRule>,
     /// Default decision when no rule matches (for whitelist mode)
     default_decision: Decision,
     /// Enable whitelist mode (only allow explicitly allowed commands)
@@ -142,6 +202,7 @@ impl std::fmt::Debug for Policy {
                 &self.rules_by_program.keys().collect::<Vec<_>>(),
             )
             .field("network_rules_count", &self.network_rules.len())
+            .field("path_rules_count", &self.path_rules.len())
             .field("whitelist_mode", &self.whitelist_mode)
             .field("default_decision", &self.default_decision)
             .finish()
@@ -158,6 +219,7 @@ impl Policy {
         Self {
             rules_by_program: HashMap::new(),
             network_rules: Vec::new(),
+            path_rules: Vec::new(),
             default_decision: Decision::Allow,
             whitelist_mode: false,
         }
@@ -168,6 +230,7 @@ impl Policy {
         Self {
             rules_by_program: HashMap::new(),
             network_rules: Vec::new(),
+            path_rules: Vec::new(),
             default_decision: Decision::Deny,
             whitelist_mode: true,
         }
@@ -178,6 +241,7 @@ impl Policy {
         Self {
             rules_by_program: HashMap::new(),
             network_rules: Vec::new(),
+            path_rules: Vec::new(),
             default_decision: Decision::Allow,
             whitelist_mode: false,
         }
@@ -883,6 +947,42 @@ impl Policy {
     /// Add network rule
     pub fn add_network_rule(&mut self, rule: NetworkRule) {
         self.network_rules.push(rule);
+    }
+
+    /// Add a path rule for file/directory access control
+    pub fn add_path_rule(&mut self, rule: PathRule) {
+        self.path_rules.push(rule);
+    }
+
+    /// Add a path rule with common options
+    pub fn add_path_rule_simple(
+        &mut self,
+        path_pattern: String,
+        is_directory: bool,
+        decision: Decision,
+        justification: Option<String>,
+    ) {
+        self.path_rules.push(PathRule::new(
+            path_pattern,
+            is_directory,
+            decision,
+            justification,
+        ));
+    }
+
+    /// Check path access against path rules
+    pub fn check_path(&self, path: &str) -> Decision {
+        for rule in &self.path_rules {
+            if rule.matches_path(path) {
+                return rule.decision;
+            }
+        }
+        // If no rule matches and in whitelist mode, deny by default
+        if self.whitelist_mode {
+            Decision::Deny
+        } else {
+            self.default_decision
+        }
     }
 
     /// Get allowed prefixes
@@ -1878,5 +1978,119 @@ mod tests {
 
         let result = policy.check(&["ls".to_string(), "&".to_string(), "env".to_string()]);
         assert!(result.is_some());
+    }
+
+    // ============================================================================
+    // 新增测试: PathRule 相关功能
+    // ============================================================================
+
+    #[test]
+    fn test_path_rule_creation() {
+        let rule = PathRule::new(
+            "/etc/passwd".to_string(),
+            false,
+            Decision::Deny,
+            Some("Cannot access system files".to_string()),
+        );
+        assert_eq!(rule.path_pattern, "/etc/passwd");
+        assert!(!rule.is_directory);
+        assert_eq!(rule.decision, Decision::Deny);
+    }
+
+    #[test]
+    fn test_path_rule_matches_exact() {
+        let rule = PathRule::new("/etc/passwd".to_string(), false, Decision::Deny, None);
+        assert!(rule.matches_path("/etc/passwd"));
+        assert!(!rule.matches_path("/etc/shadow"));
+        assert!(!rule.matches_path("/etc"));
+    }
+
+    #[test]
+    fn test_path_rule_matches_wildcard() {
+        let rule = PathRule::new("/etc/*".to_string(), true, Decision::Deny, None);
+        assert!(rule.matches_path("/etc/passwd"));
+        assert!(rule.matches_path("/etc/shadow"));
+        assert!(rule.matches_path("/etc/some/nested/path"));
+        assert!(!rule.matches_path("/var/etc"));
+    }
+
+    #[test]
+    fn test_path_rule_matches_star() {
+        let rule = PathRule::new("*".to_string(), false, Decision::Allow, None);
+        assert!(rule.matches_path("/any/path"));
+        assert!(rule.matches_path("/another/path"));
+        assert!(rule.matches_path("relative/path"));
+    }
+
+    #[test]
+    fn test_path_rule_matches_directory_prefix() {
+        let rule = PathRule::new("/home".to_string(), true, Decision::Deny, None);
+        assert!(rule.matches_path("/home"));
+        assert!(rule.matches_path("/home/user"));
+        assert!(rule.matches_path("/home/user/documents"));
+        assert!(!rule.matches_path("/homeuser"));
+    }
+
+    #[test]
+    fn test_policy_add_path_rule() {
+        let mut policy = Policy::new();
+        policy.add_path_rule(PathRule::new(
+            "/etc/passwd".to_string(),
+            false,
+            Decision::Deny,
+            None,
+        ));
+        assert_eq!(policy.check_path("/etc/passwd"), Decision::Deny);
+    }
+
+    #[test]
+    fn test_policy_add_path_rule_simple() {
+        let mut policy = Policy::new();
+        policy.add_path_rule_simple(
+            "/root".to_string(),
+            true,
+            Decision::Deny,
+            Some("Root access denied".to_string()),
+        );
+        assert_eq!(policy.check_path("/root"), Decision::Deny);
+    }
+
+    #[test]
+    fn test_policy_check_path_no_match() {
+        let mut policy = Policy::new();
+        policy.add_path_rule_simple("/etc".to_string(), true, Decision::Deny, None);
+        // Default decision is Allow when no rule matches
+        assert_eq!(policy.check_path("/tmp"), Decision::Allow);
+    }
+
+    #[test]
+    fn test_policy_check_path_whitelist_mode() {
+        let mut policy = Policy::new_whitelist();
+        policy.add_path_rule_simple("/tmp".to_string(), true, Decision::Allow, None);
+        // In whitelist mode, unmatched paths are denied
+        assert_eq!(policy.check_path("/etc"), Decision::Deny);
+        assert_eq!(policy.check_path("/tmp"), Decision::Allow);
+    }
+
+    #[test]
+    fn test_policy_path_rules_multiple() {
+        let mut policy = Policy::new();
+        policy.add_path_rule_simple("/etc/passwd".to_string(), false, Decision::Deny, None);
+        policy.add_path_rule_simple("/etc/shadow".to_string(), false, Decision::Deny, None);
+        policy.add_path_rule_simple("/home".to_string(), true, Decision::Allow, None);
+
+        assert_eq!(policy.check_path("/etc/passwd"), Decision::Deny);
+        assert_eq!(policy.check_path("/etc/shadow"), Decision::Deny);
+        assert_eq!(policy.check_path("/home/user"), Decision::Allow);
+        // Default allow for unmatched
+        assert_eq!(policy.check_path("/var"), Decision::Allow);
+    }
+
+    #[test]
+    fn test_policy_debug_includes_path_rules() {
+        let mut policy = Policy::new();
+        policy.add_path_rule_simple("/etc".to_string(), true, Decision::Deny, None);
+        let debug_str = format!("{:?}", policy);
+        assert!(debug_str.contains("path_rules_count"));
     }
 }

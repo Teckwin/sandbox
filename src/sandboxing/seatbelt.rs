@@ -132,7 +132,9 @@ pub fn create_seatbelt_policy(policy: &super::SandboxPolicy) -> String {
                     // No network access - don't add network rules
                 }
                 super::NetworkSandboxPolicy::Localhost => {
-                    sbpl.push_str("(allow network* (local ip))\n");
+                    // Restrict to specific loopback addresses only
+                    sbpl.push_str("(allow network* (local ip \"127.0.0.1\"))\n");
+                    sbpl.push_str("(allow network* (local ip \"::1\"))\n");
                 }
                 super::NetworkSandboxPolicy::Proxy => {
                     // For proxy, we'll generate dynamic rules based on env
@@ -176,8 +178,15 @@ pub fn create_seatbelt_policy(policy: &super::SandboxPolicy) -> String {
                 super::NetworkSandboxPolicy::FullAccess => {
                     sbpl.push_str("(allow network*)\n");
                 }
-                super::NetworkSandboxPolicy::NoAccess => {}
-                _ => {
+                super::NetworkSandboxPolicy::NoAccess => {
+                    // No network access
+                }
+                super::NetworkSandboxPolicy::Localhost => {
+                    // Restrict to specific loopback addresses only
+                    sbpl.push_str("(allow network* (local ip \"127.0.0.1\"))\n");
+                    sbpl.push_str("(allow network* (local ip \"::1\"))\n");
+                }
+                super::NetworkSandboxPolicy::Proxy => {
                     sbpl.push_str("(allow network*)\n");
                 }
             }
@@ -247,5 +256,75 @@ mod tests {
 
         let ports = proxy_loopback_ports_from_env(&env);
         assert!(ports.contains(&8080));
+    }
+
+    // ============================================================================
+    // 新增测试: Localhost 网络策略
+    // ============================================================================
+
+    #[test]
+    fn test_seatbelt_policy_localhost_restricted() {
+        let policy = super::super::SandboxPolicy::ReadOnly {
+            file_system: super::super::FileSystemSandboxPolicy::ReadOnly,
+            network_access: super::super::NetworkSandboxPolicy::Localhost,
+        };
+
+        let sbpl = create_seatbelt_policy(&policy);
+        // Localhost policy should restrict to specific loopback addresses
+        assert!(sbpl.contains("127.0.0.1"));
+        assert!(sbpl.contains("::1"));
+        // Should NOT contain the permissive "(allow network* (local ip))"
+        assert!(!sbpl.contains("(allow network* (local ip))"));
+    }
+
+    #[test]
+    fn test_seatbelt_policy_no_network() {
+        let policy = super::super::SandboxPolicy::ReadOnly {
+            file_system: super::super::FileSystemSandboxPolicy::ReadOnly,
+            network_access: super::super::NetworkSandboxPolicy::NoAccess,
+        };
+
+        let sbpl = create_seatbelt_policy(&policy);
+        // No network should not contain network allow rules
+        assert!(!sbpl.contains("(allow network"));
+    }
+
+    #[test]
+    fn test_seatbelt_policy_full_access() {
+        let policy = super::super::SandboxPolicy::ReadOnly {
+            file_system: super::super::FileSystemSandboxPolicy::ReadOnly,
+            network_access: super::super::NetworkSandboxPolicy::FullAccess,
+        };
+
+        let sbpl = create_seatbelt_policy(&policy);
+        // FullAccess should allow all network
+        assert!(sbpl.contains("(allow network*)"));
+    }
+
+    #[test]
+    fn test_seatbelt_workspace_write_with_localhost() {
+        let policy = super::super::SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![std::path::PathBuf::from("/tmp")],
+            network_access: super::super::NetworkSandboxPolicy::Localhost,
+        };
+
+        let sbpl = create_seatbelt_policy(&policy);
+        // Should allow file write to /tmp
+        assert!(sbpl.contains("/tmp"));
+        // Should restrict localhost
+        assert!(sbpl.contains("127.0.0.1"));
+        assert!(sbpl.contains("::1"));
+    }
+
+    #[test]
+    fn test_is_loopback_host() {
+        assert!(is_loopback_host("localhost"));
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("::1"));
+        assert!(is_loopback_host("127.0.0.2"));
+        assert!(is_loopback_host("127.0.0.255"));
+        assert!(is_loopback_host("0:0:0:0:0:0:0:1"));
+        assert!(!is_loopback_host("192.168.1.1"));
+        assert!(!is_loopback_host("8.8.8.8"));
     }
 }

@@ -172,6 +172,18 @@ pub fn is_windows_sandbox_available() -> bool {
 
 /// Get the Windows sandbox level from policy
 pub fn get_sandbox_level(policy: &WindowsSandboxPolicy) -> WindowsSandboxLevel {
+    // Full: maximum restrictions - no write access to root (/) and no network
+    if !policy.write_deny.is_empty() && !policy.network_allowed {
+        // Check if write is denied for root or system directories
+        let has_root_deny = policy
+            .write_deny
+            .iter()
+            .any(|p| p.as_os_str() == "/" || p.to_string_lossy() == "/");
+        if has_root_deny {
+            return WindowsSandboxLevel::Full;
+        }
+    }
+
     if policy.write_deny.is_empty() && policy.network_allowed {
         WindowsSandboxLevel::Disabled
     } else if policy.network_allowed {
@@ -615,9 +627,10 @@ mod tests {
             WindowsSandboxLevel::Disabled
         );
 
+        // Test Strict: network denied but no root write deny
         let strict_policy = WindowsSandboxPolicy {
             read_allow: vec![],
-            write_deny: vec![PathBuf::from("/")],
+            write_deny: vec![PathBuf::from("/some/path")], // Not root
             network_allowed: false,
             use_private_desktop: true,
         };
@@ -625,6 +638,39 @@ mod tests {
             get_sandbox_level(&strict_policy),
             WindowsSandboxLevel::Strict
         );
+
+        // Test Full: network denied with root write deny
+        let full_policy = WindowsSandboxPolicy {
+            read_allow: vec![],
+            write_deny: vec![PathBuf::from("/")],
+            network_allowed: false,
+            use_private_desktop: true,
+        };
+        assert_eq!(get_sandbox_level(&full_policy), WindowsSandboxLevel::Full);
+    }
+
+    #[test]
+    fn test_get_sandbox_level_full_with_multiple_denies() {
+        // Test Full: with multiple write denies including root
+        let policy = WindowsSandboxPolicy {
+            read_allow: vec![],
+            write_deny: vec![PathBuf::from("/tmp"), PathBuf::from("/")],
+            network_allowed: false,
+            use_private_desktop: true,
+        };
+        assert_eq!(get_sandbox_level(&policy), WindowsSandboxLevel::Full);
+    }
+
+    #[test]
+    fn test_get_sandbox_level_basic_without_root_deny() {
+        // Test Basic: network allowed, write deny but not root
+        let policy = WindowsSandboxPolicy {
+            read_allow: vec![],
+            write_deny: vec![PathBuf::from("/tmp"), PathBuf::from("/home")],
+            network_allowed: true,
+            use_private_desktop: false,
+        };
+        assert_eq!(get_sandbox_level(&policy), WindowsSandboxLevel::Basic);
     }
 
     #[test]
@@ -662,14 +708,14 @@ mod tests {
             WindowsSandboxLevel::Strict
         );
 
-        // Test Full: network denied with write restrictions
+        // Test Full: network denied with write restrictions to root
         let policy_full = WindowsSandboxPolicy {
             read_allow: vec![],
             write_deny: vec![PathBuf::from("/")],
             network_allowed: false,
             use_private_desktop: true,
         };
-        assert_eq!(get_sandbox_level(&policy_full), WindowsSandboxLevel::Strict);
+        assert_eq!(get_sandbox_level(&policy_full), WindowsSandboxLevel::Full);
     }
 
     #[test]

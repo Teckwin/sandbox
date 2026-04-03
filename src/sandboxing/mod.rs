@@ -121,6 +121,32 @@ pub enum SandboxPolicy {
     },
 }
 
+impl SandboxPolicy {
+    /// Get the network policy from this sandbox policy
+    pub fn network_policy(&self) -> NetworkSandboxPolicy {
+        match self {
+            SandboxPolicy::DangerFullAccess => NetworkSandboxPolicy::FullAccess,
+            SandboxPolicy::ReadOnly { network_access, .. } => *network_access,
+            SandboxPolicy::ExternalSandbox { network_access } => *network_access,
+            SandboxPolicy::WorkspaceWrite { network_access, .. } => *network_access,
+        }
+    }
+
+    /// Get the filesystem policy from this sandbox policy
+    pub fn filesystem_policy(&self) -> FileSystemSandboxPolicy {
+        match self {
+            SandboxPolicy::DangerFullAccess => FileSystemSandboxPolicy::FullAccess,
+            SandboxPolicy::ReadOnly { file_system, .. } => file_system.clone(),
+            SandboxPolicy::ExternalSandbox { .. } => FileSystemSandboxPolicy::External,
+            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                FileSystemSandboxPolicy::WorkspaceWrite {
+                    writable_roots: writable_roots.clone(),
+                }
+            }
+        }
+    }
+}
+
 /// A command to be executed with sandboxing
 #[derive(Debug)]
 pub struct SandboxCommand {
@@ -252,8 +278,8 @@ impl SandboxManager {
             SandboxType::MacosSeatbelt => {
                 let args = crate::sandboxing::seatbelt::create_seatbelt_command_args_for_policies(
                     os_argv_to_strings(argv),
-                    &crate::FileSystemSandboxPolicy::default(),
-                    crate::NetworkSandboxPolicy::FullAccess,
+                    &policy.filesystem_policy(),
+                    policy.network_policy(),
                     std::path::Path::new("."),
                     false,
                     None,
@@ -292,8 +318,8 @@ impl SandboxManager {
             env: command.env,
             sandbox,
             sandbox_policy: policy.clone(),
-            file_system_policy: FileSystemSandboxPolicy::default(),
-            network_policy: NetworkSandboxPolicy::default(),
+            file_system_policy: policy.filesystem_policy(),
+            network_policy: policy.network_policy(),
             arg0: arg0_override,
         })
     }
@@ -643,5 +669,178 @@ mod tests {
 
         let debug_str = format!("{:?}", policy);
         assert!(!debug_str.is_empty());
+    }
+
+    // ============================================================================
+    // 新增测试: 验证 network_policy() 和 filesystem_policy() 方法
+    // ============================================================================
+
+    #[test]
+    fn test_sandbox_policy_network_policy_method() {
+        // 测试 SandboxPolicy::network_policy() 方法
+        let policy_full = SandboxPolicy::DangerFullAccess;
+        assert_eq!(
+            policy_full.network_policy(),
+            NetworkSandboxPolicy::FullAccess
+        );
+
+        let policy_readonly = SandboxPolicy::ReadOnly {
+            file_system: FileSystemSandboxPolicy::ReadOnly,
+            network_access: NetworkSandboxPolicy::NoAccess,
+        };
+        assert_eq!(
+            policy_readonly.network_policy(),
+            NetworkSandboxPolicy::NoAccess
+        );
+
+        let policy_external = SandboxPolicy::ExternalSandbox {
+            network_access: NetworkSandboxPolicy::Localhost,
+        };
+        assert_eq!(
+            policy_external.network_policy(),
+            NetworkSandboxPolicy::Localhost
+        );
+
+        let policy_workspace = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![PathBuf::from("/tmp")],
+            network_access: NetworkSandboxPolicy::Proxy,
+        };
+        assert_eq!(
+            policy_workspace.network_policy(),
+            NetworkSandboxPolicy::Proxy
+        );
+    }
+
+    #[test]
+    fn test_sandbox_policy_filesystem_policy_method() {
+        // 测试 SandboxPolicy::filesystem_policy() 方法
+        let policy_full = SandboxPolicy::DangerFullAccess;
+        assert_eq!(
+            policy_full.filesystem_policy(),
+            FileSystemSandboxPolicy::FullAccess
+        );
+
+        let policy_readonly = SandboxPolicy::ReadOnly {
+            file_system: FileSystemSandboxPolicy::ReadOnly,
+            network_access: NetworkSandboxPolicy::NoAccess,
+        };
+        assert_eq!(
+            policy_readonly.filesystem_policy(),
+            FileSystemSandboxPolicy::ReadOnly
+        );
+
+        let policy_external = SandboxPolicy::ExternalSandbox {
+            network_access: NetworkSandboxPolicy::Localhost,
+        };
+        assert_eq!(
+            policy_external.filesystem_policy(),
+            FileSystemSandboxPolicy::External
+        );
+
+        let policy_workspace = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![PathBuf::from("/tmp"), PathBuf::from("/home")],
+            network_access: NetworkSandboxPolicy::FullAccess,
+        };
+        let fs_policy = policy_workspace.filesystem_policy();
+        match fs_policy {
+            FileSystemSandboxPolicy::WorkspaceWrite { writable_roots } => {
+                assert_eq!(writable_roots.len(), 2);
+            }
+            _ => panic!("Expected WorkspaceWrite variant"),
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_sandbox_exec_request_carries_network_policy() {
+        // 测试 SandboxExecRequest 正确携带 network_policy
+        let manager = SandboxManager::new();
+
+        // 测试 NoAccess 策略
+        let policy = SandboxPolicy::ReadOnly {
+            file_system: FileSystemSandboxPolicy::ReadOnly,
+            network_access: NetworkSandboxPolicy::NoAccess,
+        };
+        let command = SandboxCommand {
+            program: OsString::from("ls"),
+            args: vec![],
+            cwd: PathBuf::from("/tmp"),
+            env: HashMap::new(),
+        };
+        let request = manager.create_exec_request(command, policy).unwrap();
+        assert_eq!(request.network_policy, NetworkSandboxPolicy::NoAccess);
+
+        // 测试 Localhost 策略
+        let policy_localhost = SandboxPolicy::ReadOnly {
+            file_system: FileSystemSandboxPolicy::ReadOnly,
+            network_access: NetworkSandboxPolicy::Localhost,
+        };
+        let command = SandboxCommand {
+            program: OsString::from("ls"),
+            args: vec![],
+            cwd: PathBuf::from("/tmp"),
+            env: HashMap::new(),
+        };
+        let request = manager
+            .create_exec_request(command, policy_localhost)
+            .unwrap();
+        assert_eq!(request.network_policy, NetworkSandboxPolicy::Localhost);
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn test_sandbox_exec_request_carries_network_policy() {
+        // Skip on non-macOS as it requires platform-specific sandbox executable
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_sandbox_exec_request_carries_filesystem_policy() {
+        // 测试 SandboxExecRequest 正确携带 file_system_policy
+        let manager = SandboxManager::new();
+
+        // 测试 ReadOnly 策略
+        let policy = SandboxPolicy::ReadOnly {
+            file_system: FileSystemSandboxPolicy::ReadOnly,
+            network_access: NetworkSandboxPolicy::FullAccess,
+        };
+        let command = SandboxCommand {
+            program: OsString::from("ls"),
+            args: vec![],
+            cwd: PathBuf::from("/tmp"),
+            env: HashMap::new(),
+        };
+        let request = manager.create_exec_request(command, policy).unwrap();
+        assert_eq!(
+            request.file_system_policy,
+            FileSystemSandboxPolicy::ReadOnly
+        );
+
+        // 测试 WorkspaceWrite 策略
+        let policy_workspace = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![PathBuf::from("/workspace")],
+            network_access: NetworkSandboxPolicy::FullAccess,
+        };
+        let command = SandboxCommand {
+            program: OsString::from("ls"),
+            args: vec![],
+            cwd: PathBuf::from("/tmp"),
+            env: HashMap::new(),
+        };
+        let request = manager
+            .create_exec_request(command, policy_workspace)
+            .unwrap();
+        match request.file_system_policy {
+            FileSystemSandboxPolicy::WorkspaceWrite { writable_roots } => {
+                assert_eq!(writable_roots.len(), 1);
+            }
+            _ => panic!("Expected WorkspaceWrite variant"),
+        }
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn test_sandbox_exec_request_carries_filesystem_policy() {
+        // Skip on non-macOS as it requires platform-specific sandbox executable
     }
 }
