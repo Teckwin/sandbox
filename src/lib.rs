@@ -70,9 +70,9 @@ pub use execpolicy::{
 // Linux 特定功能 - 所有平台都可调用，非 Linux 返回默认值
 #[allow(unused_imports)]
 pub use linux_sandbox::{
-    create_linux_sandbox_command_args_for_policies, execute_with_capsicum, execute_with_pledge,
-    find_system_bwrap_in_path, get_landlock_version, is_landlock_available, system_bwrap_warning,
-    CapsicumLevel, PledgePromises,
+    create_linux_sandbox_command_args_for_policies, create_pledge_promises_from_policy,
+    execute_with_capsicum, execute_with_pledge, find_system_bwrap_in_path, get_landlock_version,
+    is_landlock_available, system_bwrap_warning, CapsicumLevel, PledgePromises,
 };
 
 // Windows 特定功能 - 所有平台都可调用，非 Windows 返回默认值

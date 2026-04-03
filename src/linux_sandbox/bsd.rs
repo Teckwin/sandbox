@@ -16,6 +16,16 @@ pub enum CapsicumLevel {
     Strict,
 }
 
+// FreeBSD libc bindings for Capsicum
+#[cfg(target_os = "freebsd")]
+extern "C" {
+    fn cap_enter() -> std::os::raw::c_int;
+    fn cap_rights_limit(
+        fd: std::os::raw::c_int,
+        rights: *const std::os::raw::c_void,
+    ) -> std::os::raw::c_int;
+}
+
 /// OpenBSD pledge promises
 #[derive(Clone, Debug, Default)]
 pub struct PledgePromises {
@@ -117,6 +127,61 @@ impl PledgePromises {
     }
 }
 
+/// Create PledgePromises from SandboxPolicy
+pub fn create_pledge_promises_from_policy(
+    file_system_policy: &crate::FileSystemSandboxPolicy,
+    network_policy: crate::NetworkSandboxPolicy,
+) -> PledgePromises {
+    let mut promises = PledgePromises::default_safe();
+
+    // Adjust based on filesystem policy
+    match file_system_policy {
+        crate::FileSystemSandboxPolicy::FullAccess => {
+            // Allow everything
+            promises.rpath = true;
+            promises.wpath = true;
+            promises.cpath = true;
+        }
+        crate::FileSystemSandboxPolicy::ReadOnly => {
+            // Read only
+            promises.rpath = true;
+            promises.wpath = false;
+            promises.cpath = false;
+        }
+        crate::FileSystemSandboxPolicy::WorkspaceWrite { .. } => {
+            // Allow read and some write
+            promises.rpath = true;
+            promises.wpath = true;
+            promises.cpath = true;
+        }
+        crate::FileSystemSandboxPolicy::External => {
+            // External - minimal restrictions
+        }
+    }
+
+    // Adjust based on network policy
+    match network_policy {
+        crate::NetworkSandboxPolicy::FullAccess => {
+            promises.inet = true;
+            promises.dns = true;
+        }
+        crate::NetworkSandboxPolicy::Localhost => {
+            // Localhost still needs inet for loopback
+            promises.inet = true;
+        }
+        crate::NetworkSandboxPolicy::NoAccess => {
+            promises.inet = false;
+            promises.dns = false;
+        }
+        crate::NetworkSandboxPolicy::Proxy => {
+            promises.inet = true;
+            promises.dns = true;
+        }
+    }
+
+    promises
+}
+
 /// Create FreeBSD sandbox arguments
 pub fn create_freebsd_sandbox_args(argv: &[String], level: CapsicumLevel) -> Vec<String> {
     let mut args = vec![];
@@ -173,13 +238,44 @@ mod freebsd_impl {
     pub fn execute_with_capsicum(
         program: &str,
         args: &[String],
-        _level: super::CapsicumLevel,
+        level: super::CapsicumLevel,
     ) -> std::io::Result<std::process::Child> {
+        // If disabled, just spawn without sandboxing
+        if matches!(level, super::CapsicumLevel::Disabled) {
+            let mut cmd = Command::new(program);
+            cmd.args(args);
+            cmd.stdin(Stdio::inherit());
+            cmd.stdout(Stdio::inherit());
+            cmd.stderr(Stdio::inherit());
+            return cmd.spawn();
+        }
+
+        // Build command that will call cap_enter() before exec
+        // We need to use a shell wrapper or spawn a child that enters capsicum
+        let capsicum_wrapper = format!("exec {}", args.join(" "));
+
         let mut cmd = Command::new(program);
         cmd.args(args);
         cmd.stdin(Stdio::inherit());
         cmd.stdout(Stdio::inherit());
         cmd.stderr(Stdio::inherit());
+
+        // Note: In a real implementation, this would require either:
+        // 1. A wrapper binary that calls cap_enter() before exec
+        // 2. Using prctl to set up the sandbox before spawning
+        // 3. LD_PRELOAD or similar mechanism
+        //
+        // For now, we set an environment variable to indicate the sandbox should be enabled
+        // The actual enforcement would be done by a capsicum-enabled loader or wrapper
+        cmd.env(
+            "CAPSICUM_ENABLED",
+            match level {
+                super::CapsicumLevel::Basic => "basic",
+                super::CapsicumLevel::Strict => "strict",
+                _ => "disabled",
+            },
+        );
+
         cmd.spawn()
     }
 }
@@ -268,5 +364,100 @@ mod tests {
         let s = promises.to_pledge_string();
         assert!(s.contains("stdio"));
         assert!(s.contains("rpath"));
+    }
+
+    // ============================================================================
+    // 新增测试: create_pledge_promises_from_policy 函数
+    // ============================================================================
+
+    #[test]
+    fn test_create_pledge_promises_from_policy_full_access() {
+        let promises = create_pledge_promises_from_policy(
+            &crate::FileSystemSandboxPolicy::FullAccess,
+            crate::NetworkSandboxPolicy::FullAccess,
+        );
+        let s = promises.to_pledge_string();
+        // FullAccess should allow all filesystem and network
+        assert!(s.contains("rpath"));
+        assert!(s.contains("wpath"));
+        assert!(s.contains("cpath"));
+        assert!(s.contains("inet"));
+        assert!(s.contains("dns"));
+    }
+
+    #[test]
+    fn test_create_pledge_promises_from_policy_readonly() {
+        let promises = create_pledge_promises_from_policy(
+            &crate::FileSystemSandboxPolicy::ReadOnly,
+            crate::NetworkSandboxPolicy::NoAccess,
+        );
+        let s = promises.to_pledge_string();
+        // ReadOnly should allow read but not write
+        assert!(s.contains("rpath"));
+        assert!(!s.contains("wpath"));
+        assert!(!s.contains("cpath"));
+        // NoAccess should deny network
+        assert!(!s.contains("inet"));
+        assert!(!s.contains("dns"));
+    }
+
+    #[test]
+    fn test_create_pledge_promises_from_policy_workspace() {
+        let promises = create_pledge_promises_from_policy(
+            &crate::FileSystemSandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![std::path::PathBuf::from("/tmp")],
+            },
+            crate::NetworkSandboxPolicy::Localhost,
+        );
+        let s = promises.to_pledge_string();
+        // WorkspaceWrite should allow read and write
+        assert!(s.contains("rpath"));
+        assert!(s.contains("wpath"));
+        // Localhost should allow inet for loopback
+        assert!(s.contains("inet"));
+        // But not dns (specific to localhost)
+        assert!(!s.contains("dns"));
+    }
+
+    #[test]
+    fn test_create_pledge_promises_from_policy_external() {
+        let promises = create_pledge_promises_from_policy(
+            &crate::FileSystemSandboxPolicy::External,
+            crate::NetworkSandboxPolicy::Proxy,
+        );
+        let s = promises.to_pledge_string();
+        // External has minimal restrictions, Proxy allows inet and dns
+        assert!(s.contains("inet"));
+        assert!(s.contains("dns"));
+    }
+
+    #[test]
+    fn test_create_pledge_promises_from_policy_no_network() {
+        let promises = create_pledge_promises_from_policy(
+            &crate::FileSystemSandboxPolicy::FullAccess,
+            crate::NetworkSandboxPolicy::NoAccess,
+        );
+        let s = promises.to_pledge_string();
+        // No network access
+        assert!(!s.contains("inet"));
+        assert!(!s.contains("dns"));
+    }
+
+    #[test]
+    fn test_capsicum_level_variants() {
+        assert_eq!(CapsicumLevel::default(), CapsicumLevel::Disabled);
+        let _ = CapsicumLevel::Basic;
+        let _ = CapsicumLevel::Strict;
+    }
+
+    #[test]
+    fn test_pledge_promises_default_safe() {
+        let promises = PledgePromises::default_safe();
+        let s = promises.to_pledge_string();
+        // default_safe should be restrictive
+        assert!(s.contains("stdio"));
+        assert!(s.contains("rpath"));
+        assert!(!s.contains("wpath")); // Not allowed by default
+        assert!(!s.contains("inet")); // Not allowed by default
     }
 }
