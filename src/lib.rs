@@ -44,6 +44,9 @@ pub mod process_hardening;
 pub mod sandboxing;
 pub mod windows_sandbox;
 
+// Re-export SandboxPolicyExt for external use
+pub use sandboxing::SandboxPolicyExt;
+
 // ============================================================================
 // Core API - 这些是用户主要使用的接口
 // ============================================================================
@@ -54,7 +57,6 @@ pub use sandboxing::{
     SandboxExecRequest, SandboxManager, SandboxPolicy, SandboxTransformError, SandboxType,
     SandboxablePreference,
 };
-
 // 进程加固
 pub use process_hardening::pre_main_hardening;
 
