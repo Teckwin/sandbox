@@ -1145,7 +1145,6 @@ pub fn parse_policy(content: &str) -> Result<Policy, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     // ============================================================================
     // PathRule 路径规范化安全测试
