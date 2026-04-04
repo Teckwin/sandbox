@@ -112,7 +112,7 @@ impl PathRule {
         if path_pattern.contains("..") {
             panic!("Security error: PathRule path_pattern cannot contain '..' - potential path traversal attack: {}", path_pattern);
         }
-        
+
         Self {
             path_pattern,
             is_directory,
@@ -569,20 +569,20 @@ impl Policy {
         rules_to_check.sort_by(|a, b| {
             let a_rule = a.as_any().downcast_ref::<PrefixRule>();
             let b_rule = b.as_any().downcast_ref::<PrefixRule>();
-            
+
             let a_len = a_rule.map(|r| r.pattern.rest.len()).unwrap_or(0);
             let b_len = b_rule.map(|r| r.pattern.rest.len()).unwrap_or(0);
-            
+
             // First compare by pattern length (specificity)
             let length_cmp = b_len.cmp(&a_len);
             if length_cmp != std::cmp::Ordering::Equal {
                 return length_cmp;
             }
-            
+
             // For same length patterns, deny takes precedence over allow
             let a_decision = a_rule.map(|r| r.decision).unwrap_or(Decision::Allow);
             let b_decision = b_rule.map(|r| r.decision).unwrap_or(Decision::Allow);
-            
+
             // Deny (1) should come before Allow (0) when decisions differ
             match (a_decision, b_decision) {
                 (Decision::Deny, Decision::Allow) => std::cmp::Ordering::Less,
@@ -612,7 +612,7 @@ impl Policy {
                         }
                     }
                 }
-                
+
                 // SECURITY: If this is a deny rule, return immediately
                 // Deny always takes precedence for security
                 let prefix_rule = rule.as_any().downcast_ref::<PrefixRule>();
@@ -623,7 +623,7 @@ impl Policy {
                 }
             }
         }
-        
+
         // If no deny rule matched, return the first matching allow rule (most specific)
         for rule in &rules_to_check {
             if let Some(m) = rule.matches(args) {
@@ -1156,55 +1156,41 @@ mod tests {
     fn test_path_rule_rejects_path_traversal_in_pattern() {
         // PathRule 的 path_pattern 不应该包含 ".." 等路径遍历攻击
         // 这是一个安全测试，验证 PathRule::new 是否拒绝恶意路径
-        
+
         // 测试: 正常的路径应该被接受
-        let normal_rule = PathRule::new(
-            "/tmp".to_string(),
-            true,
-            Decision::Allow,
-            None,
+        let normal_rule = PathRule::new("/tmp".to_string(), true, Decision::Allow, None);
+        assert!(
+            !normal_rule.path_pattern.contains(".."),
+            "Normal path should be accepted"
         );
-        assert!(!normal_rule.path_pattern.contains(".."), "Normal path should be accepted");
-        
+
         // 安全修复: 现在 PathRule::new 会拒绝包含 ".." 的恶意路径
         let malicious_pattern = "/etc/../etc/passwd";
-        let _rule = PathRule::new(
-            malicious_pattern.to_string(),
-            false,
-            Decision::Allow,
-            None,
-        );
+        let _rule = PathRule::new(malicious_pattern.to_string(), false, Decision::Allow, None);
         // 如果到达这里，说明安全修复未生效
-        panic!("Security error: Malicious pattern '{}' was accepted without validation", malicious_pattern);
+        panic!(
+            "Security error: Malicious pattern '{}' was accepted without validation",
+            malicious_pattern
+        );
     }
 
     #[test]
     fn test_path_rule_validates_normalized_paths() {
         // 测试规范化路径验证
-        let rule = PathRule::new(
-            "/tmp".to_string(),
-            true,
-            Decision::Allow,
-            None,
-        );
-        
+        let rule = PathRule::new("/tmp".to_string(), true, Decision::Allow, None);
+
         // 正常路径应该匹配
         assert!(rule.matches_path("/tmp"));
         assert!(rule.matches_path("/tmp/file.txt"));
-        
+
         // 非规范化路径 (包含 ..) 不应该匹配
         // 但当前实现没有规范化检查
     }
 
     #[test]
     fn test_path_rule_with_trailing_slash() {
-        let rule = PathRule::new(
-            "/tmp".to_string(),
-            true,
-            Decision::Allow,
-            None,
-        );
-        
+        let rule = PathRule::new("/tmp".to_string(), true, Decision::Allow, None);
+
         // 应该匹配带尾随斜杠的路径
         assert!(rule.matches_path("/tmp/"));
     }
@@ -1276,12 +1262,12 @@ mod tests {
         // 测试 deny 规则应该优先于 allow 规则
         // 这是安全最佳实践：拒绝优先于允许
         let mut policy = Policy::new();
-        
+
         // 先添加 deny 规则
         policy
             .add_prefix_rule(&["cat".to_string()], Decision::Deny, None)
             .unwrap();
-        
+
         // 后添加 allow 规则（更具体）
         policy
             .add_prefix_rule(
@@ -1293,12 +1279,9 @@ mod tests {
 
         // 当两个规则都匹配时，deny 应该优先
         let result = policy.check(&["cat".to_string(), "/tmp/file.txt".to_string()]);
-        
-        assert!(
-            result.is_some(),
-            "应该有匹配的规则"
-        );
-        
+
+        assert!(result.is_some(), "应该有匹配的规则");
+
         let decision = result.unwrap().decision;
         // Deny 规则应该优先（更具体）
         assert_eq!(
@@ -1313,7 +1296,7 @@ mod tests {
         // 测试更具体的 allow 规则可以覆盖更一般的 deny 规则
         // （这个测试验证当前行为，如果需要不同行为可以调整）
         let mut policy = Policy::new();
-        
+
         // 允许 cat 访问 /tmp
         policy
             .add_prefix_rule(&["cat".to_string()], Decision::Deny, None)
@@ -1327,7 +1310,7 @@ mod tests {
             .unwrap();
 
         let result = policy.check(&["cat".to_string(), "/tmp/file.txt".to_string()]);
-        
+
         // 当前实现：更具体的规则优先
         // 如果需要安全优先，应该让 deny 始终优先
         assert!(result.is_some());

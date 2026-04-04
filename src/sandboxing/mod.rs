@@ -8,10 +8,10 @@ pub mod seatbelt;
 #[cfg(target_os = "macos")]
 pub use seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 
+use std::collections::HashMap;
 #[allow(unused_imports)]
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::collections::HashMap;
 
 /// Platform-specific sandbox types
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -163,20 +163,20 @@ impl SandboxPolicy {
     /// Check if a path contains path traversal attack attempts
     pub fn contains_path_traversal(path: &Path) -> bool {
         let path_str = path.to_string_lossy();
-        
+
         // Check for ".." pattern
         if path_str.contains("..") {
             return true;
         }
-        
+
         // Check for "./" or "/." patterns (hidden files or current directory)
         if path_str.contains("/.") || path_str.contains("./") {
             return true;
         }
-        
+
         false
     }
-    
+
     /// 验证策略是否安全（用于创建沙箱请求前的检查）
     /// This method is also available via the SandboxPolicyExt trait
     pub fn is_safe(&self) -> bool {
@@ -193,7 +193,9 @@ impl SandboxPolicy {
                     return false;
                 }
                 // Check all paths for path traversal attacks
-                !writable_roots.iter().any(|p| SandboxPolicy::contains_path_traversal(p))
+                !writable_roots
+                    .iter()
+                    .any(|p| SandboxPolicy::contains_path_traversal(p))
             }
         }
     }
@@ -319,10 +321,11 @@ impl SandboxManager {
         // SECURITY: Validate policy before creating execution request
         if !policy.is_safe() {
             return Err(SandboxTransformError::UnsafePolicy(
-                "Policy failed safety check: empty writable_roots or path traversal detected".to_string(),
+                "Policy failed safety check: empty writable_roots or path traversal detected"
+                    .to_string(),
             ));
         }
-        
+
         let sandbox = self.select_initial(
             &FileSystemSandboxPolicy::default(),
             NetworkSandboxPolicy::default(),
@@ -482,7 +485,7 @@ mod tests {
         // 默认策略应该是安全的，不应该是 DangerFullAccess
         // 根据安全最佳实践，默认应该拒绝访问
         let default_policy = SandboxPolicy::default();
-        
+
         // 默认策略不应该是完全无限制的
         assert!(
             !matches!(default_policy, SandboxPolicy::DangerFullAccess),
@@ -497,7 +500,7 @@ mod tests {
             writable_roots: vec![],
             network_access: NetworkSandboxPolicy::NoAccess,
         };
-        
+
         // 获取文件系统策略并验证 - 空路径应该被降级为 ReadOnly
         let fs_policy = empty_policy.filesystem_policy();
         match fs_policy {
@@ -515,16 +518,22 @@ mod tests {
                 panic!("Unexpected filesystem policy variant");
             }
         }
-        
+
         // 验证 is_safe 方法
-        assert!(!empty_policy.is_safe(), "空 writable_roots 的 WorkspaceWrite 应该是不安全的");
-        
+        assert!(
+            !empty_policy.is_safe(),
+            "空 writable_roots 的 WorkspaceWrite 应该是不安全的"
+        );
+
         // 验证非空的是安全的
         let safe_policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![PathBuf::from("/tmp")],
             network_access: NetworkSandboxPolicy::NoAccess,
         };
-        assert!(safe_policy.is_safe(), "有有效路径的 WorkspaceWrite 应该是安全的");
+        assert!(
+            safe_policy.is_safe(),
+            "有有效路径的 WorkspaceWrite 应该是安全的"
+        );
     }
 
     #[test]
@@ -536,13 +545,13 @@ mod tests {
             PathBuf::from("/home/../../../root"),
             PathBuf::from("/tmp/./secret"),
         ];
-        
+
         for path in traversal_paths {
             let policy = SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![path.clone()],
                 network_access: NetworkSandboxPolicy::NoAccess,
             };
-            
+
             // 包含路径遍历的路径应该被认为是不安全的
             assert!(
                 !policy.is_safe(),
@@ -560,18 +569,14 @@ mod tests {
             PathBuf::from("/home/user/workspace"),
             PathBuf::from("/var/data"),
         ];
-        
+
         for path in valid_paths {
             let policy = SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![path.clone()],
                 network_access: NetworkSandboxPolicy::NoAccess,
             };
-            
-            assert!(
-                policy.is_safe(),
-                "有效路径 {:?} 应该被认为安全的",
-                path
-            );
+
+            assert!(policy.is_safe(), "有效路径 {:?} 应该被认为安全的", path);
         }
     }
 

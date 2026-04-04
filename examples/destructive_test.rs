@@ -4,7 +4,9 @@
 
 use ai_sandbox::{
     execpolicy::{Decision, Policy, RuleType},
-    sandboxing::{NetworkSandboxPolicy, SandboxCommand, SandboxManager, SandboxPolicy, SandboxPolicyExt},
+    sandboxing::{
+        NetworkSandboxPolicy, SandboxCommand, SandboxManager, SandboxPolicy, SandboxPolicyExt,
+    },
 };
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -655,7 +657,7 @@ fn test_default_policy_danger() -> TestResult {
 
 fn test_empty_workspace_paths() -> TestResult {
     use ai_sandbox::sandboxing::FileSystemSandboxPolicy;
-    
+
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: NetworkSandboxPolicy::NoAccess,
@@ -693,7 +695,7 @@ fn test_long_path_policy_bypass() -> TestResult {
 
     // FIXED: Now is_safe() will reject very long paths that might cause issues
     let is_safe = SandboxPolicyExt::is_safe(&policy);
-    
+
     // Also test that create_exec_request rejects unsafe policies
     let result = manager.create_exec_request(command, policy);
 
@@ -725,7 +727,7 @@ fn test_special_char_path_bypass() -> TestResult {
 
     // FIXED: Now is_safe() will reject paths with path traversal
     let is_safe = SandboxPolicyExt::is_safe(&policy);
-    
+
     // Also test that create_exec_request rejects unsafe policies
     let result = manager.create_exec_request(command, policy);
 
