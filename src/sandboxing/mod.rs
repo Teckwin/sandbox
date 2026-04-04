@@ -100,12 +100,11 @@ pub enum FileSystemSandboxPolicy {
 }
 
 /// Sandbox policy definition
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SandboxPolicy {
-    /// No sandboxing - full access
-    #[default]
+    /// No sandboxing - full access (deprecated: use ReadOnly as default)
     DangerFullAccess,
-    /// Read-only sandbox
+    /// Read-only sandbox (安全的默认选项)
     ReadOnly {
         file_system: FileSystemSandboxPolicy,
         network_access: NetworkSandboxPolicy,
@@ -119,6 +118,16 @@ pub enum SandboxPolicy {
         writable_roots: Vec<PathBuf>,
         network_access: NetworkSandboxPolicy,
     },
+}
+
+impl Default for SandboxPolicy {
+    /// 默认使用安全的 ReadOnly 策略
+    fn default() -> Self {
+        SandboxPolicy::ReadOnly {
+            file_system: FileSystemSandboxPolicy::ReadOnly,
+            network_access: NetworkSandboxPolicy::NoAccess,
+        }
+    }
 }
 
 impl SandboxPolicy {
@@ -139,10 +148,29 @@ impl SandboxPolicy {
             SandboxPolicy::ReadOnly { file_system, .. } => file_system.clone(),
             SandboxPolicy::ExternalSandbox { .. } => FileSystemSandboxPolicy::External,
             SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
-                FileSystemSandboxPolicy::WorkspaceWrite {
-                    writable_roots: writable_roots.clone(),
+                // 安全检查：如果 writable_roots 为空，自动降级为只读
+                if writable_roots.is_empty() {
+                    FileSystemSandboxPolicy::ReadOnly
+                } else {
+                    FileSystemSandboxPolicy::WorkspaceWrite {
+                        writable_roots: writable_roots.clone(),
+                    }
                 }
             }
+        }
+    }
+    
+    /// 验证策略是否安全（用于创建沙箱请求前的检查）
+    pub fn is_safe(&self) -> bool {
+        match self {
+            // DangerFullAccess 是不安全的
+            SandboxPolicy::DangerFullAccess => false,
+            // ReadOnly 默认是安全的
+            SandboxPolicy::ReadOnly { .. } => true,
+            // ExternalSandbox 不由我们控制，视为潜在不安全
+            SandboxPolicy::ExternalSandbox { .. } => false,
+            // WorkspaceWrite 必须有非空的 writable_roots
+            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => !writable_roots.is_empty(),
         }
     }
 }
@@ -406,12 +434,53 @@ mod tests {
     // ============================================================================
 
     #[test]
-    fn test_sandbox_policy_default_is_restrictive() {
-        // 测试默认策略是否足够安全
+    fn test_default_policy_should_be_secure() {
+        // 默认策略应该是安全的，不应该是 DangerFullAccess
+        // 根据安全最佳实践，默认应该拒绝访问
         let default_policy = SandboxPolicy::default();
-        // 默认应该是 DangerFullAccess (无限制)
-        // 这意味着默认是不安全的，需要用户显式设置限制策略
-        assert!(matches!(default_policy, SandboxPolicy::DangerFullAccess));
+        
+        // 默认策略不应该是完全无限制的
+        assert!(
+            !matches!(default_policy, SandboxPolicy::DangerFullAccess),
+            "默认策略不应该是 DangerFullAccess，这是安全漏洞！"
+        );
+    }
+
+    #[test]
+    fn test_workspace_write_rejects_empty_paths() {
+        // WorkspaceWrite 应该拒绝空的 writable_roots
+        let empty_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: NetworkSandboxPolicy::NoAccess,
+        };
+        
+        // 获取文件系统策略并验证 - 空路径应该被降级为 ReadOnly
+        let fs_policy = empty_policy.filesystem_policy();
+        match fs_policy {
+            FileSystemSandboxPolicy::ReadOnly => {
+                // 预期行为：空路径被降级为只读
+                assert!(true);
+            }
+            FileSystemSandboxPolicy::WorkspaceWrite { writable_roots } => {
+                assert!(
+                    !writable_roots.is_empty(),
+                    "空的 writable_roots 应该被拒绝或自动处理"
+                );
+            }
+            _ => {
+                panic!("Unexpected filesystem policy variant");
+            }
+        }
+        
+        // 验证 is_safe 方法
+        assert!(!empty_policy.is_safe(), "空 writable_roots 的 WorkspaceWrite 应该是不安全的");
+        
+        // 验证非空的是安全的
+        let safe_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![PathBuf::from("/tmp")],
+            network_access: NetworkSandboxPolicy::NoAccess,
+        };
+        assert!(safe_policy.is_safe(), "有有效路径的 WorkspaceWrite 应该是安全的");
     }
 
     #[test]

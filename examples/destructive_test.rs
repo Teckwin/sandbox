@@ -639,42 +639,39 @@ fn test_multiple_env_bypass() -> TestResult {
 
 fn test_default_policy_danger() -> TestResult {
     let policy = SandboxPolicy::default();
+    // 现在默认是 ReadOnly (安全的)，不再是 DangerFullAccess
     let is_dangerous = matches!(policy, SandboxPolicy::DangerFullAccess);
 
     TestResult::new(
         "Default Policy Danger",
-        is_dangerous,
+        !is_dangerous, // 取反：安全时通过
         if is_dangerous {
             "Default policy is DangerFullAccess - insecure by default!".to_string()
         } else {
-            "Default policy is secure".to_string()
+            "Default policy is secure (ReadOnly)".to_string()
         },
     )
 }
 
 fn test_empty_workspace_paths() -> TestResult {
-    let manager = SandboxManager::new();
-    let command = SandboxCommand {
-        program: OsString::from("ls"),
-        args: vec![],
-        cwd: PathBuf::from("/tmp"),
-        env: HashMap::new(),
-    };
-
+    use ai_sandbox::sandboxing::FileSystemSandboxPolicy;
+    
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: NetworkSandboxPolicy::NoAccess,
     };
 
-    let result = manager.create_exec_request(command, policy);
+    // 现在空路径会被自动降级为 ReadOnly，所以检查 filesystem_policy
+    let fs_policy = policy.filesystem_policy();
+    let is_safe = !matches!(fs_policy, FileSystemSandboxPolicy::WorkspaceWrite { writable_roots } if writable_roots.is_empty());
 
     TestResult::new(
         "Empty Workspace Paths",
-        result.is_ok(),
-        if result.is_ok() {
-            "Empty writable_roots accepted - might allow writing anywhere!".to_string()
+        is_safe, // 安全时通过
+        if is_safe {
+            "Empty writable_roots is handled safely (downgraded to ReadOnly)".to_string()
         } else {
-            "Empty workspace is handled".to_string()
+            "Empty writable_roots accepted - might allow writing anywhere!".to_string()
         },
     )
 }
