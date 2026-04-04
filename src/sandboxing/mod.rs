@@ -435,6 +435,7 @@ fn create_linux_sandbox_args(_policy: &SandboxPolicy, _cwd: &Path) -> Vec<String
 }
 
 #[cfg(test)]
+#[allow(clippy::assertions_on_constants)]
 mod tests {
     use super::*;
 
@@ -506,7 +507,6 @@ mod tests {
         match fs_policy {
             FileSystemSandboxPolicy::ReadOnly => {
                 // 预期行为：空路径被降级为只读 - 测试通过
-                debug_assert!(true, "Empty workspace correctly downgraded to ReadOnly");
             }
             FileSystemSandboxPolicy::WorkspaceWrite { writable_roots } => {
                 assert!(
