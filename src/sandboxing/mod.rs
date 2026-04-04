@@ -505,8 +505,8 @@ mod tests {
         let fs_policy = empty_policy.filesystem_policy();
         match fs_policy {
             FileSystemSandboxPolicy::ReadOnly => {
-                // 预期行为：空路径被降级为只读
-                assert!(true);
+                // 预期行为：空路径被降级为只读 - 测试通过
+                debug_assert!(true, "Empty workspace correctly downgraded to ReadOnly");
             }
             FileSystemSandboxPolicy::WorkspaceWrite { writable_roots } => {
                 assert!(

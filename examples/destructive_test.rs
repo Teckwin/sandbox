@@ -697,7 +697,7 @@ fn test_long_path_policy_bypass() -> TestResult {
     let is_safe = SandboxPolicyExt::is_safe(&policy);
 
     // Also test that create_exec_request rejects unsafe policies
-    let result = manager.create_exec_request(command, policy);
+    let _result = manager.create_exec_request(command, policy);
 
     TestResult::new(
         "Long Path Policy Bypass",
@@ -729,7 +729,7 @@ fn test_special_char_path_bypass() -> TestResult {
     let is_safe = SandboxPolicyExt::is_safe(&policy);
 
     // Also test that create_exec_request rejects unsafe policies
-    let result = manager.create_exec_request(command, policy);
+    let _result = manager.create_exec_request(command, policy);
 
     TestResult::new(
         "Special Char Path Bypass",
