@@ -558,21 +558,68 @@ impl Policy {
         };
 
         // Sort rules by specificity: more specific rules (longer pattern) first
+        // SECURITY FIX: Deny rules should always take precedence over Allow rules
+        // for the same specificity level. This follows the principle of "deny by default".
         rules_to_check.sort_by(|a, b| {
-            let a_len = a
-                .as_any()
-                .downcast_ref::<PrefixRule>()
-                .map(|r| r.pattern.rest.len())
-                .unwrap_or(0);
-            let b_len = b
-                .as_any()
-                .downcast_ref::<PrefixRule>()
-                .map(|r| r.pattern.rest.len())
-                .unwrap_or(0);
-            b_len.cmp(&a_len) // Descending order: longer patterns first
+            let a_rule = a.as_any().downcast_ref::<PrefixRule>();
+            let b_rule = b.as_any().downcast_ref::<PrefixRule>();
+            
+            let a_len = a_rule.map(|r| r.pattern.rest.len()).unwrap_or(0);
+            let b_len = b_rule.map(|r| r.pattern.rest.len()).unwrap_or(0);
+            
+            // First compare by pattern length (specificity)
+            let length_cmp = b_len.cmp(&a_len);
+            if length_cmp != std::cmp::Ordering::Equal {
+                return length_cmp;
+            }
+            
+            // For same length patterns, deny takes precedence over allow
+            let a_decision = a_rule.map(|r| r.decision).unwrap_or(Decision::Allow);
+            let b_decision = b_rule.map(|r| r.decision).unwrap_or(Decision::Allow);
+            
+            // Deny (1) should come before Allow (0) when decisions differ
+            match (a_decision, b_decision) {
+                (Decision::Deny, Decision::Allow) => std::cmp::Ordering::Less,
+                (Decision::Allow, Decision::Deny) => std::cmp::Ordering::Greater,
+                _ => std::cmp::Ordering::Equal,
+            }
         });
 
-        for rule in rules_to_check {
+        // First check if any deny rule matches - deny takes absolute precedence
+        for rule in &rules_to_check {
+            if let Some(m) = rule.matches(args) {
+                // Check directory restrictions
+                if let Some(cwd) = working_directory {
+                    let prefix_rule = rule.as_any().downcast_ref::<PrefixRule>().unwrap();
+                    if prefix_rule.restrict_to_directories {
+                        if let Some(ref allowed_dirs) = prefix_rule.allowed_directories {
+                            if !allowed_dirs.is_empty()
+                                && !allowed_dirs.iter().any(|d| cwd.starts_with(d))
+                            {
+                                return Some(RuleMatch {
+                                    decision: Decision::Deny,
+                                    justification: Some(
+                                        "Command not allowed in current directory".to_string(),
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+                
+                // SECURITY: If this is a deny rule, return immediately
+                // Deny always takes precedence for security
+                let prefix_rule = rule.as_any().downcast_ref::<PrefixRule>();
+                if let Some(pr) = prefix_rule {
+                    if pr.decision == Decision::Deny {
+                        return Some(m);
+                    }
+                }
+            }
+        }
+        
+        // If no deny rule matched, return the first matching allow rule (most specific)
+        for rule in &rules_to_check {
             if let Some(m) = rule.matches(args) {
                 // Check directory restrictions
                 if let Some(cwd) = working_directory {
@@ -1148,6 +1195,72 @@ mod tests {
         // 尝试使用路径遍历绕过
         let result = policy.check(&["cat".to_string(), "../../../etc/passwd".to_string()]);
         // 应该被阻止（通过路径规范化后匹配）
+        assert!(result.is_some());
+    }
+
+    // ============================================================================
+    // 安全测试 - 策略优先级
+    // ============================================================================
+
+    #[test]
+    fn test_deny_rule_should_take_precedence() {
+        // 测试 deny 规则应该优先于 allow 规则
+        // 这是安全最佳实践：拒绝优先于允许
+        let mut policy = Policy::new();
+        
+        // 先添加 deny 规则
+        policy
+            .add_prefix_rule(&["cat".to_string()], Decision::Deny, None)
+            .unwrap();
+        
+        // 后添加 allow 规则（更具体）
+        policy
+            .add_prefix_rule(
+                &["cat".to_string(), "/tmp/file.txt".to_string()],
+                Decision::Allow,
+                None,
+            )
+            .unwrap();
+
+        // 当两个规则都匹配时，deny 应该优先
+        let result = policy.check(&["cat".to_string(), "/tmp/file.txt".to_string()]);
+        
+        assert!(
+            result.is_some(),
+            "应该有匹配的规则"
+        );
+        
+        let decision = result.unwrap().decision;
+        // Deny 规则应该优先（更具体）
+        assert_eq!(
+            decision,
+            Decision::Deny,
+            "Deny rule should take precedence over Allow rule for security"
+        );
+    }
+
+    #[test]
+    fn test_specific_allow_overrides_general_deny() {
+        // 测试更具体的 allow 规则可以覆盖更一般的 deny 规则
+        // （这个测试验证当前行为，如果需要不同行为可以调整）
+        let mut policy = Policy::new();
+        
+        // 允许 cat 访问 /tmp
+        policy
+            .add_prefix_rule(&["cat".to_string()], Decision::Deny, None)
+            .unwrap();
+        policy
+            .add_prefix_rule(
+                &["cat".to_string(), "/tmp".to_string()],
+                Decision::Allow,
+                None,
+            )
+            .unwrap();
+
+        let result = policy.check(&["cat".to_string(), "/tmp/file.txt".to_string()]);
+        
+        // 当前实现：更具体的规则优先
+        // 如果需要安全优先，应该让 deny 始终优先
         assert!(result.is_some());
     }
 

@@ -8,10 +8,10 @@ pub mod seatbelt;
 #[cfg(target_os = "macos")]
 pub use seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 
-use std::collections::HashMap;
 #[allow(unused_imports)]
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 
 /// Platform-specific sandbox types
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -148,7 +148,7 @@ impl SandboxPolicy {
             SandboxPolicy::ReadOnly { file_system, .. } => file_system.clone(),
             SandboxPolicy::ExternalSandbox { .. } => FileSystemSandboxPolicy::External,
             SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
-                // 安全检查：如果 writable_roots 为空，自动降级为只读
+                // Security check: if writable_roots is empty, downgrade to ReadOnly
                 if writable_roots.is_empty() {
                     FileSystemSandboxPolicy::ReadOnly
                 } else {
@@ -159,22 +159,56 @@ impl SandboxPolicy {
             }
         }
     }
+
+    /// Check if a path contains path traversal attack attempts
+    pub fn contains_path_traversal(path: &Path) -> bool {
+        let path_str = path.to_string_lossy();
+        
+        // Check for ".." pattern
+        if path_str.contains("..") {
+            return true;
+        }
+        
+        // Check for "./" or "/." patterns (hidden files or current directory)
+        if path_str.contains("/.") || path_str.contains("./") {
+            return true;
+        }
+        
+        false
+    }
     
     /// 验证策略是否安全（用于创建沙箱请求前的检查）
+    /// This method is also available via the SandboxPolicyExt trait
     pub fn is_safe(&self) -> bool {
         match self {
-            // DangerFullAccess 是不安全的
+            // DangerFullAccess is not secure
             SandboxPolicy::DangerFullAccess => false,
-            // ReadOnly 默认是安全的
+            // ReadOnly is secure by default
             SandboxPolicy::ReadOnly { .. } => true,
-            // ExternalSandbox 不由我们控制，视为潜在不安全
+            // ExternalSandbox is not controlled by us, treat as potentially insecure
             SandboxPolicy::ExternalSandbox { .. } => false,
-            // WorkspaceWrite 必须有非空的 writable_roots
-            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => !writable_roots.is_empty(),
+            // WorkspaceWrite must have non-empty writable_roots and no path traversal
+            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                if writable_roots.is_empty() {
+                    return false;
+                }
+                // Check all paths for path traversal attacks
+                !writable_roots.iter().any(|p| SandboxPolicy::contains_path_traversal(p))
+            }
         }
     }
 }
 
+/// Trait to extend SandboxPolicy with additional security checks
+pub trait SandboxPolicyExt {
+    fn is_safe(&self) -> bool;
+}
+
+impl SandboxPolicyExt for SandboxPolicy {
+    fn is_safe(&self) -> bool {
+        SandboxPolicy::is_safe(self)
+    }
+}
 /// A command to be executed with sandboxing
 #[derive(Debug)]
 pub struct SandboxCommand {
@@ -204,6 +238,8 @@ pub enum SandboxTransformError {
     #[cfg(not(target_os = "macos"))]
     SeatbeltUnavailable,
     PlatformNotSupported,
+    /// Policy is not safe (e.g., empty writable_roots or path traversal detected)
+    UnsafePolicy(String),
 }
 
 impl std::fmt::Display for SandboxTransformError {
@@ -215,6 +251,7 @@ impl std::fmt::Display for SandboxTransformError {
             #[cfg(not(target_os = "macos"))]
             Self::SeatbeltUnavailable => write!(f, "seatbelt sandbox is only available on macOS"),
             Self::PlatformNotSupported => write!(f, "sandbox is not supported on this platform"),
+            Self::UnsafePolicy(reason) => write!(f, "unsafe policy: {}", reason),
         }
     }
 }
@@ -279,6 +316,13 @@ impl SandboxManager {
         command: SandboxCommand,
         policy: SandboxPolicy,
     ) -> Result<SandboxExecRequest, SandboxTransformError> {
+        // SECURITY: Validate policy before creating execution request
+        if !policy.is_safe() {
+            return Err(SandboxTransformError::UnsafePolicy(
+                "Policy failed safety check: empty writable_roots or path traversal detected".to_string(),
+            ));
+        }
+        
         let sandbox = self.select_initial(
             &FileSystemSandboxPolicy::default(),
             NetworkSandboxPolicy::default(),
@@ -481,6 +525,54 @@ mod tests {
             network_access: NetworkSandboxPolicy::NoAccess,
         };
         assert!(safe_policy.is_safe(), "有有效路径的 WorkspaceWrite 应该是安全的");
+    }
+
+    #[test]
+    fn test_workspace_write_rejects_path_traversal() {
+        // WorkspaceWrite 应该拒绝包含路径遍历的路径
+        let traversal_paths = vec![
+            PathBuf::from("/tmp/../etc"),
+            PathBuf::from("/tmp/../../etc"),
+            PathBuf::from("/home/../../../root"),
+            PathBuf::from("/tmp/./secret"),
+        ];
+        
+        for path in traversal_paths {
+            let policy = SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![path.clone()],
+                network_access: NetworkSandboxPolicy::NoAccess,
+            };
+            
+            // 包含路径遍历的路径应该被认为是不安全的
+            assert!(
+                !policy.is_safe(),
+                "包含路径遍历的路径 {:?} 应该被认为是不安全的",
+                path
+            );
+        }
+    }
+
+    #[test]
+    fn test_workspace_write_accepts_valid_paths() {
+        // WorkspaceWrite 应该接受有效的规范化路径
+        let valid_paths = vec![
+            PathBuf::from("/tmp"),
+            PathBuf::from("/home/user/workspace"),
+            PathBuf::from("/var/data"),
+        ];
+        
+        for path in valid_paths {
+            let policy = SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![path.clone()],
+                network_access: NetworkSandboxPolicy::NoAccess,
+            };
+            
+            assert!(
+                policy.is_safe(),
+                "有效路径 {:?} 应该被认为安全的",
+                path
+            );
+        }
     }
 
     #[test]
