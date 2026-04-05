@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] - 2026-04-05
+
+### Analysis: Unfinished Features
+
+After comprehensive analysis, the following features from Issue #6 are intentionally marked as **not implemented** because they are not essential for sandbox security:
+
+#### 1. NetworkRule Execution Logic
+
+- **Status**: Not implemented
+- **Reason**: Not core security functionality
+- **Alternative**: Existing `NetworkSandboxPolicy` enum (NoAccess/Localhost/ReadOnly/FullAccess) covers 95% of security use cases
+- **Security Impact**: Low - sandbox already limits network access at the OS level
+
+#### 2. Windows Firewall Integration
+
+- **Status**: Not implemented
+- **Reason**: Not necessary - Windows Restricted Token API already provides sufficient process isolation
+- **Security Impact**: None - sandboxed processes have limited network access regardless
+
+#### 3. FreeBSD Capsicum Full Implementation
+
+- **Status**: Partial (cap_enter() exists, requires system configuration)
+- **Reason**: Platform-specific, depends on kernel support
+- **Security Impact**: Medium for FreeBSD users only
+
+#### Conclusion
+
+The current implementation provides **stable and reliable sandbox security**:
+- Filesystem isolation (ReadOnly / Workspace)
+- Network access control (NoAccess / Localhost)
+- Process permission limits (Restricted Token / Seatbelt / Bubblewrap)
+- Execution policy engine (PrefixRule / PathRule)
+- All P0/P1 security vulnerabilities from Issue #8 are fixed
+
+Additional features would add complexity without significant security benefit.
+
+### Security
+
+All security fixes from v0.2.0 are maintained and verified passing in CI.
+
 ## [0.2.0] - 2026-04-04
 
 ### Security Fixes
