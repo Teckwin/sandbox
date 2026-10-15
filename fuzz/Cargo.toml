@@ -46,4 +46,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "mxc_config"
+path = "fuzz_targets/mxc_config.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

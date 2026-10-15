@@ -67,12 +67,14 @@ Rust. Inputs are bounded to at most 4096 bytes per campaign.
 | `seatbelt_policy` | Seatbelt policy generation | Proxy requests return errors; `NoAccess` does not emit a network allow rule. |
 | `windows_policy` | Windows path computation and sandbox-level selection | Current directory is always in the allow result; only empty path lists plus enabled networking select the unrestricted process. |
 | `bsd_policy` | Capsicum argument generation and pledge policy mapping/serialization | Promise output remains ASCII; NoAccess, Localhost, and Proxy do not grant `inet` or `dns`. |
+| `mxc_config` | MXC JSON parsing, policy mapping, and Bubblewrap argv transformation | Accepted configs preserve workload argv; on Linux, the procfs mount matches `filesystem.mount_procfs`. The target never spawns the command. |
 
 Build and run one target:
 
 ```sh
 cargo +nightly fuzz check --fuzz-dir fuzz
 cargo +nightly fuzz run parse_policy --fuzz-dir fuzz -- -max_total_time=30 -max_len=4096
+cargo +nightly fuzz run mxc_config --fuzz-dir fuzz -- -max_total_time=30 -max_len=4096
 ```
 
 Campaigns run for this change, on x86_64 Linux with the address sanitizer:
@@ -84,6 +86,7 @@ Campaigns run for this change, on x86_64 Linux with the address sanitizer:
 | `seatbelt_policy` | 20,000 executions | No crash. |
 | `windows_policy` | 20,000 executions | No crash. |
 | `bsd_policy` | 20,000 executions after adding the Localhost/Proxy properties | No crash; the new fail-closed properties passed. |
+| `mxc_config` | 4,956,182 executions in 31 seconds, `-max_len=4096` | No crash; argv preservation and procfs parity properties held. |
 
 ## Findings and Fixes
 
@@ -111,5 +114,6 @@ empty before choosing `Disabled`; a read-allow policy remains protected and
 fails when its ACL enforcement is unavailable. A portable adapter regression
 and the strengthened Windows fuzz property now cover this case.
 
-Fuzz corpora and crash artifacts are generated under `fuzz/corpus/` and
-`fuzz/artifacts/`; they are local working data and are not committed here.
+Curated MXC-policy seeds are checked in under `fuzz/corpus/mxc_config/`.
+Generated corpus growth and crash artifacts under `fuzz/corpus/` and
+`fuzz/artifacts/` remain local working data and are not committed.
