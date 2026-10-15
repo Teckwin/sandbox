@@ -17,13 +17,10 @@ thiserror = "1.0"
 anyhow = "1.0"
 tokio = { version = "1.0", features = ["full"] }
 multimap = "0.9"
-
-[target.'cfg(target_os = "macos")'.dependencies]
 url = "2.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 which = "1.0"
-url = "2.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows sandbox dependencies
@@ -73,3 +70,5 @@ path = "src/lib.rs"
 [[bin]]
 name = "sandbox-exec"
 path = "src/bin/sandbox-exec.rs"
+
+[workspace]

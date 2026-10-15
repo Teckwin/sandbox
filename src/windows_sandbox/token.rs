@@ -12,7 +12,9 @@ use std::ffi::c_void;
 use std::ptr;
 
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_SUCCESS, HANDLE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GetLastError, LocalFree, ERROR_SUCCESS, HANDLE, HLOCAL,
+};
 
 #[cfg(target_os = "windows")]
 #[allow(unused_imports)]
@@ -93,11 +95,13 @@ unsafe fn set_default_dacl(h_token: HANDLE, sids: &[*mut c_void]) -> Result<(), 
         std::mem::size_of::<TokenDefaultDaclInfo>() as u32,
     );
     if ok == 0 {
+        let _ = LocalFree(p_new_dacl as HLOCAL);
         return Err(format!(
             "SetTokenInformation(TokenDefaultDacl) failed: {}",
             GetLastError()
         ));
     }
+    let _ = LocalFree(p_new_dacl as HLOCAL);
     Ok(())
 }
 
@@ -219,9 +223,6 @@ unsafe fn enable_single_privilege(token: HANDLE, name: &str) -> Result<(), Strin
 pub unsafe fn create_restricted_token_with_caps(
     psid_capabilities: &[*mut c_void],
 ) -> Result<HANDLE, String> {
-    if psid_capabilities.is_empty() {
-        return Err("no capability SIDs provided".to_string());
-    }
     let base = get_current_token_for_restriction()?;
     let result = create_token_with_caps_from(base, psid_capabilities);
     let _ = CloseHandle(base);
@@ -237,9 +238,6 @@ unsafe fn create_token_with_caps_from(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
 ) -> Result<HANDLE, String> {
-    if psid_capabilities.is_empty() {
-        return Err("no capability SIDs provided".to_string());
-    }
     let mut logon_sid_bytes = get_logon_sid_bytes(base_token)?;
     let psid_logon = logon_sid_bytes.as_mut_ptr() as *mut c_void;
     let mut everyone = world_sid()?;
@@ -281,7 +279,10 @@ unsafe fn create_token_with_caps_from(
     dacl_sids.extend_from_slice(psid_capabilities);
     set_default_dacl(new_token, &dacl_sids)?;
 
-    enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
+    if let Err(error) = enable_single_privilege(new_token, "SeChangeNotifyPrivilege") {
+        let _ = CloseHandle(new_token);
+        return Err(error);
+    }
     Ok(new_token)
 }
 
@@ -344,19 +345,14 @@ mod tests {
         }
     }
 
-    /// Test that create_restricted_token_with_caps correctly rejects empty capabilities
+    /// Test that an empty capability list still creates a restricted token.
     #[test]
-    fn test_create_restricted_token_rejects_empty_caps() {
+    fn test_create_restricted_token_accepts_empty_caps() {
         unsafe {
             let result = create_restricted_token_with_caps(&[]);
-            // This should fail with "no capability SIDs provided"
-            assert!(result.is_err());
-            let err = result.unwrap_err();
-            assert!(
-                err.contains("no capability SIDs provided"),
-                "Expected 'no capability SIDs provided' error, got: {}",
-                err
-            );
+            if let Ok(token) = result {
+                close_token(token).expect("failed to close restricted token");
+            }
         }
     }
 

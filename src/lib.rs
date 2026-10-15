@@ -1,7 +1,7 @@
 //! AI Sandbox - Cross-platform AI tool sandbox security
 //!
 //! A comprehensive sandbox library supporting multiple platforms:
-//! - Linux: Bubblewrap + Seccomp + Landlock
+//! - Linux: Bubblewrap namespaces
 //! - macOS: Seatbelt (sandbox-exec)
 //! - Windows: Restricted Token
 //! - FreeBSD: Capsicum
@@ -9,8 +9,9 @@
 //!
 //! # Unified API
 //!
-//! This crate provides a unified API that works across all supported platforms.
-//! Users do not need to write platform-specific code.
+//! This crate provides a unified request API for verified platform executors.
+//! Platform-specific helpers remain available on other supported targets, but
+//! the common API fails closed when no verified executor is available.
 //!
 //! ## Quick Start
 //!
@@ -53,9 +54,9 @@ pub use sandboxing::SandboxPolicyExt;
 
 // 沙箱管理
 pub use sandboxing::{
-    get_platform_sandbox, FileSystemSandboxPolicy, NetworkSandboxPolicy, SandboxCommand,
-    SandboxExecRequest, SandboxManager, SandboxPolicy, SandboxTransformError, SandboxType,
-    SandboxablePreference,
+    get_platform_sandbox, FileSystemSandboxPolicy, MxcSandboxConfig, NetworkSandboxPolicy,
+    SandboxCommand, SandboxExecRequest, SandboxExecutionError, SandboxManager, SandboxPolicy,
+    SandboxTransformError, SandboxType, SandboxablePreference,
 };
 // 进程加固
 pub use process_hardening::pre_main_hardening;
@@ -73,8 +74,9 @@ pub use execpolicy::{
 #[allow(unused_imports)]
 pub use linux_sandbox::{
     create_linux_sandbox_command_args_for_policies, create_pledge_promises_from_policy,
-    execute_with_capsicum, execute_with_pledge, find_system_bwrap_in_path, get_landlock_version,
-    is_landlock_available, system_bwrap_warning, CapsicumLevel, PledgePromises,
+    ensure_bwrap_support, execute_with_capsicum, execute_with_pledge, find_system_bwrap_in_path,
+    get_landlock_version, is_landlock_available, system_bwrap_warning, CapsicumLevel,
+    PledgePromises,
 };
 
 // Windows 特定功能 - 所有平台都可调用，非 Windows 返回默认值

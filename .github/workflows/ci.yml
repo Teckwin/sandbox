@@ -162,6 +162,36 @@ jobs:
           echo "Testing demo example (Windows)"
           cargo run --example demo -- 2>$null || echo "Demo may require platform-specific setup"
 
+  freebsd-native:
+    name: Native tests (FreeBSD)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Test in FreeBSD VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          sync: rsync
+          copyback: false
+          prepare: pkg install -y rust
+          run: cargo test --lib
+
+  openbsd-native:
+    name: Native tests (OpenBSD)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Test in OpenBSD VM
+        uses: vmactions/openbsd-vm@v1
+        with:
+          sync: rsync
+          copyback: false
+          prepare: pkg_add rust
+          run: cargo test --lib
+
   # Test on minimum Rust version
   minimum-version:
     name: Minimum Version (1.83)

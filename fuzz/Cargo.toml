@@ -1,0 +1,56 @@
+[package]
+name = "ai-sandbox-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+ai-sandbox = { path = ".." }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "parse_policy"
+path = "fuzz_targets/parse_policy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bwrap_policy"
+path = "fuzz_targets/bwrap_policy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "seatbelt_policy"
+path = "fuzz_targets/seatbelt_policy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "windows_policy"
+path = "fuzz_targets/windows_policy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bsd_policy"
+path = "fuzz_targets/bsd_policy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mxc_config"
+path = "fuzz_targets/mxc_config.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

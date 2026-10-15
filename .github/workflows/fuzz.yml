@@ -1,0 +1,66 @@
+name: Fuzz
+
+"on":
+  push:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "src/**"
+      - "fuzz/**"
+      - ".github/workflows/fuzz.yml"
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "src/**"
+      - "fuzz/**"
+      - ".github/workflows/fuzz.yml"
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - parse_policy
+          - bwrap_policy
+          - seatbelt_policy
+          - windows_policy
+          - bsd_policy
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Run ${{ matrix.target }}
+        shell: bash
+        run: |
+          mkdir -p fuzz/logs
+          set -o pipefail
+          cargo +nightly fuzz run "${{ matrix.target }}" --fuzz-dir fuzz -- -max_total_time=60 -max_len=65536 2>&1 | tee "fuzz/logs/${{ matrix.target }}.log"
+
+      - name: Upload fuzz log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-fuzz-${{ matrix.target }}
+          path: fuzz/logs/${{ matrix.target }}.log
+          if-no-files-found: warn
+          retention-days: 14

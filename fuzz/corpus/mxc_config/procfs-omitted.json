@@ -1,0 +1,1 @@
+{"containment":"bubblewrap","filesystem":{"mount_procfs":false,"readonly_paths":["/tmp"],"readwrite_paths":[],"denied_paths":[]},"network":{"egress":{"default":"deny"},"ingress":{"default":"deny","host_loopback":"deny"}},"timeout_ms":1800000}

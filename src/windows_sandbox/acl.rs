@@ -122,7 +122,7 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<(), String
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
-    let _ = SetNamedSecurityInfoW(
+    let set_code = SetNamedSecurityInfoW(
         wpath.as_ptr() as *mut u16,
         1, // SE_FILE_OBJECT
         DACL_SECURITY_INFORMATION,
@@ -140,7 +140,11 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<(), String
     if !p_sd.is_null() {
         windows_sys::Win32::Foundation::LocalFree(p_sd as windows_sys::Win32::Foundation::HLOCAL);
     }
-    Ok(())
+    if set_code == ERROR_SUCCESS {
+        Ok(())
+    } else {
+        Err(format!("SetNamedSecurityInfoW failed: {}", set_code))
+    }
 }
 
 /// Add a DENY WRITE ACE for a specific SID
@@ -186,7 +190,7 @@ pub unsafe fn add_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<(), S
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
-    let _ = SetNamedSecurityInfoW(
+    let set_code = SetNamedSecurityInfoW(
         wpath.as_ptr() as *mut u16,
         1, // SE_FILE_OBJECT
         DACL_SECURITY_INFORMATION,
@@ -204,7 +208,11 @@ pub unsafe fn add_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<(), S
     if !p_sd.is_null() {
         windows_sys::Win32::Foundation::LocalFree(p_sd as windows_sys::Win32::Foundation::HLOCAL);
     }
-    Ok(())
+    if set_code == ERROR_SUCCESS {
+        Ok(())
+    } else {
+        Err(format!("SetNamedSecurityInfoW failed: {}", set_code))
+    }
 }
 
 /// Grants RX to the null device for the given SID to support stdout/stderr redirection.
@@ -228,7 +236,7 @@ pub unsafe fn allow_null_device(psid: *mut c_void) -> Result<(), String> {
         std::ptr::null_mut(),
     );
     if h.is_null() || h == INVALID_HANDLE_VALUE {
-        return Ok(()); // Silently fail - null device might not exist in all contexts
+        return Err("CreateFileW failed for \\.\\NUL".to_string());
     }
     let mut p_sd: *mut c_void = std::ptr::null_mut();
     let mut p_dacl: *mut ACL = std::ptr::null_mut();
@@ -242,7 +250,11 @@ pub unsafe fn allow_null_device(psid: *mut c_void) -> Result<(), String> {
         std::ptr::null_mut(),
         &mut p_sd,
     );
-    if code == ERROR_SUCCESS {
+    if code != ERROR_SUCCESS {
+        let _ = CloseHandle(h);
+        return Err(format!("GetSecurityInfo failed: {}", code));
+    }
+    let result = {
         let trustee = TRUSTEE_W {
             pMultipleTrustee: std::ptr::null_mut(),
             MultipleTrusteeOperation: 0,
@@ -258,8 +270,10 @@ pub unsafe fn allow_null_device(psid: *mut c_void) -> Result<(), String> {
         explicit.Trustee = trustee;
         let mut p_new_dacl: *mut ACL = std::ptr::null_mut();
         let code2 = SetEntriesInAclW(1, &explicit, p_dacl, &mut p_new_dacl);
-        if code2 == ERROR_SUCCESS {
-            let _ = SetSecurityInfo(
+        if code2 != ERROR_SUCCESS {
+            Err(format!("SetEntriesInAclW failed: {}", code2))
+        } else {
+            let set_code = SetSecurityInfo(
                 h,
                 SE_FILE_OBJECT,
                 DACL_SECURITY_INFORMATION,
@@ -273,34 +287,18 @@ pub unsafe fn allow_null_device(psid: *mut c_void) -> Result<(), String> {
                     p_new_dacl as windows_sys::Win32::Foundation::HLOCAL,
                 );
             }
+            if set_code == ERROR_SUCCESS {
+                Ok(())
+            } else {
+                Err(format!("SetSecurityInfo failed: {}", set_code))
+            }
         }
-    }
+    };
     if !p_sd.is_null() {
         windows_sys::Win32::Foundation::LocalFree(p_sd as windows_sys::Win32::Foundation::HLOCAL);
     }
     let _ = CloseHandle(h);
-    Ok(())
-}
-
-/// Ensure allow mask ACEs exist for a path (helper for compatibility)
-#[allow(dead_code)]
-pub fn ensure_allow_mask_aces(_path: &Path, _psid: *mut c_void) -> Result<(), String> {
-    // Placeholder for full implementation - basic ACL already handles this
-    Ok(())
-}
-
-/// Ensure write allow ACEs exist for a path
-#[allow(dead_code)]
-pub fn ensure_allow_write_aces(_path: &Path, _psid: *mut c_void) -> Result<(), String> {
-    // Placeholder for full implementation
-    Ok(())
-}
-
-/// Check if a path's mask allows specific access
-#[allow(dead_code)]
-pub fn path_mask_allows(_path: &Path, _psid: *mut c_void, _access: u32) -> bool {
-    // Placeholder for full implementation
-    true
+    result
 }
 
 #[cfg(test)]

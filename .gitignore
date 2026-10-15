@@ -52,5 +52,10 @@ coverage/
 
 # Project specific
 .intent-engine/
+fuzz/corpus/*
+!fuzz/corpus/mxc_config/
+fuzz/corpus/mxc_config/*
+!fuzz/corpus/mxc_config/*.json
+fuzz/artifacts/
 
 *.zip

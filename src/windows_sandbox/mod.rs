@@ -22,6 +22,33 @@ mod process;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+#[cfg(any(target_os = "windows", test))]
+fn quote_windows_arg(arg: &str) -> String {
+    let mut quoted = String::with_capacity(arg.len() + 2);
+    quoted.push('"');
+    let mut backslashes = 0;
+
+    for character in arg.chars() {
+        match character {
+            '\\' => backslashes += 1,
+            '"' => {
+                quoted.extend(std::iter::repeat('\\').take(backslashes * 2 + 1));
+                quoted.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                quoted.extend(std::iter::repeat('\\').take(backslashes));
+                quoted.push(character);
+                backslashes = 0;
+            }
+        }
+    }
+
+    quoted.extend(std::iter::repeat('\\').take(backslashes * 2));
+    quoted.push('"');
+    quoted
+}
+
 /// Windows sandbox level
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum WindowsSandboxLevel {
@@ -184,12 +211,94 @@ pub fn get_sandbox_level(policy: &WindowsSandboxPolicy) -> WindowsSandboxLevel {
         }
     }
 
-    if policy.write_deny.is_empty() && policy.network_allowed {
+    if policy.read_allow.is_empty() && policy.write_deny.is_empty() && policy.network_allowed {
         WindowsSandboxLevel::Disabled
     } else if policy.network_allowed {
         WindowsSandboxLevel::Basic
     } else {
         WindowsSandboxLevel::Strict
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn with_windows_process_adapter<T>(
+    policy: &WindowsSandboxPolicy,
+    execute: impl FnOnce(bool) -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    execute(get_sandbox_level(policy) != WindowsSandboxLevel::Disabled)
+}
+
+#[cfg(test)]
+mod portable_adapter_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::io;
+
+    struct MockWindowsProcessAdapter {
+        restricted_selected: Cell<Option<bool>>,
+    }
+
+    impl MockWindowsProcessAdapter {
+        fn execute(&self, policy: &WindowsSandboxPolicy) -> io::Result<()> {
+            with_windows_process_adapter(policy, |restricted| {
+                self.restricted_selected.set(Some(restricted));
+                if restricted {
+                    Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "mock restricted process launcher unavailable",
+                    ))
+                } else {
+                    Ok(())
+                }
+            })
+        }
+    }
+
+    #[test]
+    fn protected_policy_does_not_fall_back_to_unrestricted_process() {
+        let adapter = MockWindowsProcessAdapter {
+            restricted_selected: Cell::new(None),
+        };
+
+        let result = adapter.execute(&WindowsSandboxPolicy::read_only());
+
+        assert_eq!(adapter.restricted_selected.get(), Some(true));
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn full_access_policy_selects_only_the_unrestricted_process() {
+        let adapter = MockWindowsProcessAdapter {
+            restricted_selected: Cell::new(None),
+        };
+        let policy = WindowsSandboxPolicy {
+            read_allow: Vec::new(),
+            write_deny: Vec::new(),
+            network_allowed: true,
+            use_private_desktop: false,
+        };
+
+        adapter.execute(&policy).unwrap();
+
+        assert_eq!(adapter.restricted_selected.get(), Some(false));
+    }
+
+    #[test]
+    fn read_allow_policy_never_selects_the_unrestricted_process() {
+        let adapter = MockWindowsProcessAdapter {
+            restricted_selected: Cell::new(None),
+        };
+        let policy = WindowsSandboxPolicy {
+            read_allow: vec![PathBuf::from("/workspace")],
+            write_deny: Vec::new(),
+            network_allowed: true,
+            use_private_desktop: false,
+        };
+
+        let result = adapter.execute(&policy);
+
+        assert_eq!(adapter.restricted_selected.get(), Some(true));
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
     }
 }
 
@@ -199,16 +308,24 @@ mod windows_impl {
     #[allow(unused_imports)]
     use crate::windows_sandbox::acl::{add_allow_ace, add_deny_write_ace, allow_null_device};
     #[allow(unused_imports)]
-    use crate::windows_sandbox::process::{spawn_process_with_pipes, StderrMode, StdinMode};
+    use crate::windows_sandbox::process::{
+        spawn_process_with_pipes, PipeSpawnHandles, StderrMode, StdinMode,
+    };
     use crate::windows_sandbox::token::{close_token, create_readonly_token};
     use std::io;
-    use std::process::Command;
+    use std::io::Read;
+    use std::os::windows::io::{FromRawHandle, RawHandle};
     #[allow(unused_imports)]
     use windows_sys::Win32::Security::CreateWellKnownSid;
     #[allow(unused_imports)]
     use windows_sys::Win32::Security::TOKEN_ADJUST_DEFAULT;
     #[allow(unused_imports)]
     use windows_sys::Win32::Security::TOKEN_ADJUST_SESSIONID;
+    use windows_sys::Win32::System::Threading::{TerminateProcess, WaitForSingleObject, INFINITE};
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT},
+        System::Threading::PROCESS_INFORMATION,
+    };
 
     /// Execute command with restricted token
     ///
@@ -218,23 +335,148 @@ mod windows_impl {
         program: &str,
         args: &[String],
         policy: &WindowsSandboxPolicy,
-    ) -> io::Result<std::process::Child> {
-        // Create a restricted token for sandboxed execution
-        let token = match create_readonly_token() {
-            Ok(t) => t,
+    ) -> io::Result<()> {
+        execute_sandboxed_command(
+            program,
+            args,
+            &std::env::current_dir()?,
+            &HashMap::new(),
+            policy,
+            None,
+        )
+        .map(|_| ())
+    }
+
+    fn read_pipe(handle: usize) -> io::Result<Vec<u8>> {
+        let mut file = unsafe {
+            std::fs::File::from_raw_handle(
+                handle as windows_sys::Win32::Foundation::HANDLE as RawHandle,
+            )
+        };
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    unsafe fn close_spawn_handles(handles: &PipeSpawnHandles) {
+        let _ = CloseHandle(handles.process.hProcess);
+        let _ = CloseHandle(handles.stdout_read);
+        if let Some(handle) = handles.stderr_read {
+            let _ = CloseHandle(handle);
+        }
+        if let Some(handle) = handles.stdin_write {
+            let _ = CloseHandle(handle);
+        }
+    }
+
+    unsafe fn spawn_restricted_process(
+        program: &str,
+        args: &[String],
+        cwd: &Path,
+        env: &HashMap<String, String>,
+        policy: &WindowsSandboxPolicy,
+    ) -> io::Result<crate::windows_sandbox::process::PipeSpawnHandles> {
+        if !policy.network_allowed {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Windows network isolation is unavailable; refusing protected execution",
+            ));
+        }
+        if !policy.read_allow.is_empty() || !policy.write_deny.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Windows filesystem ACL enforcement is unavailable for this policy",
+            ));
+        }
+
+        let token = create_readonly_token().map_err(io::Error::other)?;
+        let mut argv = Vec::with_capacity(args.len() + 1);
+        argv.push(program.to_string());
+        argv.extend(args.iter().cloned());
+        let result = spawn_process_with_pipes(
+            token,
+            &argv,
+            cwd,
+            env,
+            StdinMode::Closed,
+            StderrMode::Separate,
+            policy.use_private_desktop,
+        )
+        .map_err(io::Error::other);
+        let _ = close_token(token);
+        result
+    }
+
+    unsafe fn wait_for_restricted_process(
+        process: PROCESS_INFORMATION,
+        timeout_ms: Option<u64>,
+        stdout_thread: std::thread::JoinHandle<io::Result<Vec<u8>>>,
+        stderr_thread: std::thread::JoinHandle<io::Result<Vec<u8>>>,
+    ) -> io::Result<SandboxExecutionResult> {
+        let wait_ms = match timeout_ms {
+            Some(value) if value < u32::MAX as u64 => value as u32,
+            Some(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Windows wait timeout is too large",
+                ))
+            }
+            None => INFINITE,
+        };
+        let wait_result = WaitForSingleObject(process.hProcess, wait_ms);
+        let mut timed_out = false;
+        if wait_result != WAIT_OBJECT_0 {
+            if timeout_ms.is_some() && wait_result == WAIT_TIMEOUT {
+                timed_out = true;
+                if TerminateProcess(process.hProcess, 1) == 0 {
+                    let error = io::Error::last_os_error();
+                    let _ = CloseHandle(process.hProcess);
+                    return Err(error);
+                }
+                let _ = WaitForSingleObject(process.hProcess, INFINITE);
+            } else {
+                let error = io::Error::last_os_error();
+                let _ = CloseHandle(process.hProcess);
+                return Err(error);
+            }
+        }
+
+        let stdout = match stdout_thread.join() {
+            Ok(result) => result?,
             Err(_) => {
-                // Fall back to standard Command if token creation fails
-                return Command::new(program).args(args).spawn();
+                let _ = CloseHandle(process.hProcess);
+                let _ = stderr_thread.join();
+                return Err(io::Error::other("stdout reader thread panicked"));
             }
         };
-
-        // For now, use standard Command as fallback
-        // Full implementation would use CreateProcessAsUserW with the restricted token
-        let _ = policy;
-        let _ = token;
-        let _ = close_token(token);
-
-        Command::new(program).args(args).spawn()
+        let stderr = match stderr_thread.join() {
+            Ok(result) => result?,
+            Err(_) => {
+                let _ = CloseHandle(process.hProcess);
+                return Err(io::Error::other("stderr reader thread panicked"));
+            }
+        };
+        let mut exit_code = 1u32;
+        if !timed_out {
+            let mut code = 0u32;
+            if windows_sys::Win32::System::Threading::GetExitCodeProcess(
+                process.hProcess,
+                &mut code,
+            ) == 0
+            {
+                let error = io::Error::last_os_error();
+                let _ = CloseHandle(process.hProcess);
+                return Err(error);
+            }
+            exit_code = code;
+        }
+        let _ = CloseHandle(process.hProcess);
+        Ok(SandboxExecutionResult {
+            exit_code: if timed_out { -1 } else { exit_code as i32 },
+            stdout,
+            stderr,
+            timed_out,
+        })
     }
 
     /// Execute a command in the Windows sandbox and capture output
@@ -249,112 +491,105 @@ mod windows_impl {
         use std::process::{Command, Stdio};
         use std::time::Duration;
 
-        // Get sandbox level from policy
-        let sandbox_level = get_sandbox_level(policy);
+        with_windows_process_adapter(policy, |restricted| {
+            // A protected policy uses only the restricted-token process creator.
+            // Failure is returned; the original command is never run.
+            if restricted {
+                let handles = unsafe { spawn_restricted_process(program, args, cwd, env, policy) }?;
+                if handles.stderr_read.is_none() {
+                    unsafe { close_spawn_handles(&handles) };
+                    return Err(io::Error::other(
+                        "restricted process returned no stderr pipe",
+                    ));
+                }
+                let process = handles.process;
+                let stdout_handle = handles.stdout_read;
+                let stderr_handle = handles.stderr_read.expect("checked above");
+                let stdout_handle = stdout_handle as usize;
+                let stderr_handle = stderr_handle as usize;
+                let stdout_thread = std::thread::spawn(move || read_pipe(stdout_handle));
+                let stderr_thread = std::thread::spawn(move || read_pipe(stderr_handle));
+                return unsafe {
+                    wait_for_restricted_process(process, timeout_ms, stdout_thread, stderr_thread)
+                };
+            }
 
-        // If policy indicates we need sandboxing, use the restricted token path
-        if sandbox_level != WindowsSandboxLevel::Disabled {
-            // Use the restricted token execution path
-            // Note: execute_with_restricted_token is unsafe, but we handle the safety internally
-            return unsafe { execute_with_restricted_token(program, args, policy) }.and_then(
-                |_| {
-                    // Fallback to standard Command for now since the full implementation
-                    // doesn't return output. This needs to be improved to properly capture output.
-                    let mut cmd = Command::new(program);
-                    cmd.args(args);
-                    cmd.current_dir(cwd);
-                    for (key, value) in env {
-                        cmd.env(key, value);
-                    }
-                    cmd.stdin(Stdio::null());
-                    cmd.stdout(Stdio::piped());
-                    cmd.stderr(Stdio::piped());
-                    let output = cmd.output()?;
-                    Ok(SandboxExecutionResult {
-                        exit_code: output.status.code().unwrap_or(-1),
-                        stdout: output.stdout,
-                        stderr: output.stderr,
-                        timed_out: false,
-                    })
-                },
-            );
-        }
+            // Fallback to standard Command for disabled sandbox
+            let mut cmd = Command::new(program);
+            cmd.args(args);
+            cmd.current_dir(cwd);
 
-        // Fallback to standard Command for disabled sandbox
-        let mut cmd = Command::new(program);
-        cmd.args(args);
-        cmd.current_dir(cwd);
+            for (key, value) in env {
+                cmd.env(key, value);
+            }
 
-        for (key, value) in env {
-            cmd.env(key, value);
-        }
+            cmd.stdin(Stdio::null());
+            cmd.stdout(Stdio::piped());
+            cmd.stderr(Stdio::piped());
 
-        cmd.stdin(Stdio::null());
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
+            let mut child = cmd.spawn()?;
 
-        let mut child = cmd.spawn()?;
+            let timeout = timeout_ms.map(Duration::from_millis);
 
-        let timeout = timeout_ms.map(Duration::from_millis);
+            if let Some(timeout) = timeout {
+                // Simple timeout implementation using std::thread::sleep
+                let start = std::time::Instant::now();
+                loop {
+                    match child.try_wait()? {
+                        Some(status) => {
+                            let exit_code = status.code().unwrap_or(-1);
+                            let stdout = child
+                                .stdout
+                                .take()
+                                .map(|mut s| {
+                                    let mut v = vec![];
+                                    std::io::Read::read_to_end(&mut s, &mut v).ok();
+                                    v
+                                })
+                                .unwrap_or_default();
+                            let stderr = child
+                                .stderr
+                                .take()
+                                .map(|mut s| {
+                                    let mut v = vec![];
+                                    std::io::Read::read_to_end(&mut s, &mut v).ok();
+                                    v
+                                })
+                                .unwrap_or_default();
 
-        if let Some(timeout) = timeout {
-            // Simple timeout implementation using std::thread::sleep
-            let start = std::time::Instant::now();
-            loop {
-                match child.try_wait()? {
-                    Some(status) => {
-                        let exit_code = status.code().unwrap_or(-1);
-                        let stdout = child
-                            .stdout
-                            .take()
-                            .map(|mut s| {
-                                let mut v = vec![];
-                                std::io::Read::read_to_end(&mut s, &mut v).ok();
-                                v
-                            })
-                            .unwrap_or_default();
-                        let stderr = child
-                            .stderr
-                            .take()
-                            .map(|mut s| {
-                                let mut v = vec![];
-                                std::io::Read::read_to_end(&mut s, &mut v).ok();
-                                v
-                            })
-                            .unwrap_or_default();
-
-                        return Ok(SandboxExecutionResult {
-                            exit_code,
-                            stdout,
-                            stderr,
-                            timed_out: false,
-                        });
-                    }
-                    None => {
-                        if start.elapsed() > timeout {
-                            // Timeout - kill the process
-                            let _ = child.kill();
-                            let _ = child.wait();
                             return Ok(SandboxExecutionResult {
-                                exit_code: -1,
-                                stdout: vec![],
-                                stderr: vec![],
-                                timed_out: true,
+                                exit_code,
+                                stdout,
+                                stderr,
+                                timed_out: false,
                             });
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        None => {
+                            if start.elapsed() > timeout {
+                                // Timeout - kill the process
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                return Ok(SandboxExecutionResult {
+                                    exit_code: -1,
+                                    stdout: vec![],
+                                    stderr: vec![],
+                                    timed_out: true,
+                                });
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
                     }
                 }
             }
-        }
 
-        let output = child.wait_with_output()?;
+            let output = child.wait_with_output()?;
 
-        Ok(SandboxExecutionResult {
-            exit_code: output.status.code().unwrap_or(-1),
-            stdout: output.stdout,
-            stderr: output.stderr,
-            timed_out: false,
+            Ok(SandboxExecutionResult {
+                exit_code: output.status.code().unwrap_or(-1),
+                stdout: output.stdout,
+                stderr: output.stderr,
+                timed_out: false,
+            })
         })
     }
 
@@ -376,12 +611,13 @@ mod windows_impl {
             ));
         }
 
-        // For now, use placeholder SID handling
-        // Full implementation would convert string SIDs to PSIDs
-        let _ = read_sids;
-        let _ = write_sids;
-
-        Ok(())
+        if read_sids.is_empty() && write_sids.is_empty() {
+            return Ok(());
+        }
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "string SID to ACL enforcement is not implemented",
+        ))
     }
 
     /// Create a restricted token for sandboxed execution
@@ -406,7 +642,7 @@ mod windows_impl {
         _program: &str,
         _args: &[String],
         _policy: &WindowsSandboxPolicy,
-    ) -> io::Result<std::process::Child> {
+    ) -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "Windows sandbox not available on this platform",
@@ -476,10 +712,21 @@ use self::process::{spawn_process_with_pipes, StderrMode, StdinMode};
 use self::token::{close_token, create_readonly_token};
 
 #[cfg(test)]
-#[cfg(test)]
-#[cfg(target_os = "windows")]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn windows_argument_quoting_preserves_backslashes_and_quotes() {
+        assert_eq!(quote_windows_arg(""), "\"\"");
+        assert_eq!(quote_windows_arg("simple"), "\"simple\"");
+        assert_eq!(quote_windows_arg("with space"), "\"with space\"");
+        assert_eq!(quote_windows_arg("with\\\"quote"), "\"with\\\\\\\"quote\"");
+        assert_eq!(
+            quote_windows_arg("trailing space\\"),
+            "\"trailing space\\\\\""
+        );
+    }
 
     #[test]
     fn test_windows_sandbox_level_default() {
@@ -612,6 +859,45 @@ mod tests {
         let (allow, _deny) = compute_allow_deny_paths(&policy, Path::new("/tmp"));
 
         assert!(allow.iter().any(|p| p == Path::new("/tmp")));
+
+        let (allow_with_cwd, _) = compute_allow_deny_paths(&policy, Path::new("/workspace"));
+        assert!(allow_with_cwd.iter().any(|path| path == Path::new("/tmp")));
+        assert_eq!(
+            allow_with_cwd
+                .iter()
+                .filter(|path| *path == Path::new("/workspace"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn compute_allow_deny_paths_adds_existing_protected_paths_once() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ai-sandbox-windows-paths-{suffix}"));
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join(".codex")).unwrap();
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+
+        let git_path = root.join(".git");
+        let policy = WindowsSandboxPolicy {
+            read_allow: vec![root.clone()],
+            write_deny: vec![git_path.clone()],
+            network_allowed: false,
+            use_private_desktop: true,
+        };
+        let (allow, deny) = compute_allow_deny_paths(&policy, &root);
+
+        assert_eq!(allow, vec![root.clone()]);
+        assert_eq!(deny.len(), 3);
+        assert!(deny.contains(&git_path));
+        assert!(deny.contains(&root.join(".codex")));
+        assert!(deny.contains(&root.join(".agents")));
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -738,5 +1024,72 @@ mod tests {
         for root in &writable_roots {
             assert!(policy.write_deny.iter().any(|p| p.starts_with(root)));
         }
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod native_windows_tests {
+    use super::*;
+    use std::io;
+
+    #[test]
+    fn restricted_token_process_launches_native_command() {
+        let program = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32")
+            .join("cmd.exe");
+        let result = unsafe {
+            execute_with_restricted_token(
+                &program.to_string_lossy(),
+                &["/c".into(), "exit 0".into()],
+                &WindowsSandboxPolicy::default(),
+            )
+        };
+
+        assert!(result.is_ok(), "restricted-token launch failed: {result:?}");
+    }
+
+    #[test]
+    fn unsupported_protected_policies_fail_closed_before_launch() {
+        let cwd = std::env::current_dir().unwrap();
+        let command = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32")
+            .join("missing-sandbox-command.exe");
+        let policies = [
+            WindowsSandboxPolicy {
+                read_allow: vec![cwd.clone()],
+                write_deny: Vec::new(),
+                network_allowed: true,
+                use_private_desktop: false,
+            },
+            WindowsSandboxPolicy {
+                read_allow: Vec::new(),
+                write_deny: Vec::new(),
+                network_allowed: false,
+                use_private_desktop: false,
+            },
+        ];
+
+        for policy in policies {
+            let result = execute_sandboxed_command(
+                &command.to_string_lossy(),
+                &[],
+                &cwd,
+                &HashMap::new(),
+                &policy,
+                None,
+            );
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+        }
+    }
+
+    #[test]
+    fn native_acl_entrypoint_reports_unimplemented_enforcement() {
+        let root =
+            std::env::temp_dir().join(format!("ai-sandbox-windows-acl-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let result = unsafe { apply_acl_restrictions(&root, &["S-1-1-0".into()], &[]) };
+        std::fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
     }
 }
