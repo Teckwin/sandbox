@@ -49,13 +49,13 @@ const SET_RLIMIT_CORE_FAILED_EXIT_CODE: i32 = 7;
 pub(crate) fn pre_main_hardening_linux() {
     // Disable ptrace attach / mark process non-dumpable
     let ret_code = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
-    if ret_code != 0 {
+    run_when_syscall_fails(ret_code, &mut || {
         eprintln!(
             "ERROR: prctl(PR_SET_DUMPABLE, 0) failed: {}",
             std::io::Error::last_os_error()
         );
         std::process::exit(PRCTL_FAILED_EXIT_CODE);
-    }
+    });
 
     // Set core file size limit to 0
     set_core_file_size_limit_to_zero();
@@ -127,13 +127,13 @@ fn set_core_file_size_limit_to_zero() {
     };
 
     let ret_code = unsafe { libc::setrlimit(libc::RLIMIT_CORE, &rlim) };
-    if ret_code != 0 {
+    run_when_syscall_fails(ret_code, &mut || {
         eprintln!(
             "ERROR: setrlimit(RLIMIT_CORE) failed: {}",
             std::io::Error::last_os_error()
         );
         std::process::exit(SET_RLIMIT_CORE_FAILED_EXIT_CODE);
-    }
+    });
 }
 
 #[cfg(windows)]
@@ -157,6 +157,12 @@ where
         .collect()
 }
 
+fn run_when_syscall_fails(ret_code: i32, on_failure: &mut dyn FnMut()) {
+    if ret_code != 0 {
+        on_failure();
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -175,6 +181,16 @@ mod tests {
         let keys = env_keys_with_prefix(vars, b"LD_");
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].as_os_str(), ld_test_var);
+    }
+
+    #[test]
+    fn syscall_failure_handler_covers_success_and_failure_without_exiting() {
+        let failures = std::cell::Cell::new(0);
+        let mut increment_failures = || failures.set(failures.get() + 1);
+        run_when_syscall_fails(0, &mut increment_failures);
+        assert_eq!(failures.get(), 0);
+        run_when_syscall_fails(-1, &mut increment_failures);
+        assert_eq!(failures.get(), 1);
     }
 
     // ============================================================================

@@ -232,16 +232,36 @@ fn mount_path(path: &Path) -> Result<String, BwrapBuildError> {
         .ok_or_else(|| BwrapBuildError::InvalidMountPath(canonical))
 }
 
-fn add_system_mounts(mut args: BwrapArgs) -> BwrapArgs {
+fn add_system_mounts(args: BwrapArgs) -> BwrapArgs {
+    add_system_mounts_with_procfs(args, true)
+}
+
+#[cfg(test)]
+fn add_system_mounts_with(args: BwrapArgs, path_exists: impl Fn(&Path) -> bool) -> BwrapArgs {
+    add_system_mounts_with_procfs_and(args, true, &path_exists)
+}
+
+fn add_system_mounts_with_procfs(args: BwrapArgs, mount_procfs: bool) -> BwrapArgs {
+    add_system_mounts_with_procfs_and(args, mount_procfs, &|path| path.exists())
+}
+
+fn add_system_mounts_with_procfs_and(
+    mut args: BwrapArgs,
+    mount_procfs: bool,
+    path_exists: &dyn Fn(&Path) -> bool,
+) -> BwrapArgs {
     for path in ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"] {
         let path = Path::new(path);
-        if path.exists() {
+        if path_exists(path) {
             args = args.ro_bind(path, path);
         }
     }
 
-    args.dev("/dev")
-        .proc("/proc")
+    args = args.dev("/dev");
+    if mount_procfs {
+        args = args.proc("/proc");
+    }
+    args.tmp_dir("/tmp")
         .tmp_dir("/tmp")
         .tmp_dir("/home")
         .tmp_dir("/root")
@@ -250,6 +270,25 @@ fn add_system_mounts(mut args: BwrapArgs) -> BwrapArgs {
         .unshare_ipc()
         .new_session()
         .die_with_parent()
+}
+
+pub(crate) fn create_support_probe_args() -> Vec<String> {
+    add_system_mounts_with_procfs(BwrapArgs::new(), false)
+        .cwd(Path::new("/usr"))
+        .clear_env()
+        .separator()
+        .command(vec!["/usr/bin/true".into()])
+        .build()
+}
+
+#[cfg(test)]
+pub(crate) fn create_support_probe_args_with_procfs(mount_procfs: bool) -> Vec<String> {
+    add_system_mounts_with_procfs(BwrapArgs::new(), mount_procfs)
+        .cwd(Path::new("/usr"))
+        .clear_env()
+        .separator()
+        .command(vec!["/usr/bin/true".into()])
+        .build()
 }
 
 fn add_process_isolation(args: BwrapArgs) -> BwrapArgs {
@@ -393,14 +432,7 @@ fn add_read_only_roots(
         let mut parents = root.ancestors().skip(1).collect::<Vec<_>>();
         parents.reverse();
         for parent in parents {
-            if parent == Path::new("/")
-                || parent == Path::new("/tmp")
-                || parent == Path::new("/home")
-                || parent == Path::new("/root")
-                || parent == cwd
-                || cwd.starts_with(parent)
-                || is_system_mounted(parent)
-            {
+            if should_skip_created_parent(parent, cwd) {
                 continue;
             }
             if created_dirs.insert(parent.to_path_buf()) {
@@ -416,6 +448,16 @@ fn is_system_mounted(path: &Path) -> bool {
     ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"]
         .iter()
         .any(|root| path == Path::new(root) || path.starts_with(root))
+}
+
+fn should_skip_created_parent(parent: &Path, cwd: &Path) -> bool {
+    parent == Path::new("/")
+        || parent == Path::new("/tmp")
+        || parent == Path::new("/home")
+        || parent == Path::new("/root")
+        || parent == cwd
+        || cwd.starts_with(parent)
+        || is_system_mounted(parent)
 }
 
 fn filtered_environment<'a>(
@@ -607,9 +649,8 @@ mod tests {
             tool_a.clone(),
             tool_b.clone(),
         ];
-        if Path::new("/usr").exists() {
-            roots.push(PathBuf::from("/usr"));
-        }
+        #[cfg(unix)]
+        roots.push(PathBuf::from("/usr"));
         let args = create_readonly_bwrap_command_with_roots(
             vec!["true".into()],
             &cwd,
@@ -645,14 +686,13 @@ mod tests {
                 .count(),
             1
         );
-        if Path::new("/usr").exists() {
-            assert_eq!(
-                args.windows(3)
-                    .filter(|parts| *parts == ["--ro-bind", "/usr", "/usr"])
-                    .count(),
-                1
-            );
-        }
+        #[cfg(unix)]
+        assert_eq!(
+            args.windows(3)
+                .filter(|parts| *parts == ["--ro-bind", "/usr", "/usr"])
+                .count(),
+            1
+        );
 
         assert!(matches!(
             create_readonly_bwrap_command_with_roots(
@@ -714,16 +754,29 @@ mod tests {
             crate::NetworkSandboxPolicy::Localhost,
             crate::NetworkSandboxPolicy::Proxy,
         ] {
-            assert!(matches!(
-                create_readonly_bwrap_command(
-                    vec!["true".to_string()],
-                    Path::new("/tmp"),
-                    &[],
-                    network,
-                ),
-                Err(BwrapBuildError::UnsupportedNetworkPolicy(policy)) if policy == network
-            ));
+            let error = create_readonly_bwrap_command(
+                vec!["true".to_string()],
+                Path::new("/tmp"),
+                &[],
+                network,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!("bubblewrap cannot enforce network policy {network:?}")
+            );
         }
+        assert!(!matches!(
+            create_readonly_bwrap_command(
+                vec!["true".to_string()],
+                Path::new("/tmp"),
+                &[],
+                crate::NetworkSandboxPolicy::Localhost,
+            ),
+            Err(BwrapBuildError::UnsupportedNetworkPolicy(
+                crate::NetworkSandboxPolicy::Proxy
+            ))
+        ));
     }
 
     #[test]
@@ -744,9 +797,10 @@ mod tests {
         assert!(args
             .windows(3)
             .any(|parts| parts == ["--setenv", "PATH", "/usr/bin"]));
-        assert!(!args.iter().any(|arg| arg == "LD_PRELOAD"
-            || arg == "DYLD_INSERT_LIBRARIES"
-            || arg == "NODE_OPTIONS"));
+        assert!(!has_unsafe_environment_name(&args));
+        for key in ["LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "NODE_OPTIONS"] {
+            assert!(has_unsafe_environment_name(&[key.to_string()]));
+        }
 
         let empty_workspace = create_workspace_bwrap_command(
             vec!["true".into()],
@@ -835,6 +889,68 @@ mod tests {
             ),
             Err(BwrapBuildError::MissingMountPath(_))
         ));
+        assert!(matches!(
+            create_workspace_bwrap_command(
+                vec!["true".into()],
+                &cwd,
+                &[PathBuf::from("/")],
+                &[],
+                crate::NetworkSandboxPolicy::NoAccess,
+            ),
+            Err(BwrapBuildError::WritableFilesystemRoot(_))
+        ));
+    }
+
+    fn has_unsafe_environment_name(args: &[String]) -> bool {
+        args.iter().any(|arg| {
+            arg == "LD_PRELOAD" || arg == "DYLD_INSERT_LIBRARIES" || arg == "NODE_OPTIONS"
+        })
+    }
+
+    #[test]
+    fn injected_mount_predicate_covers_present_and_missing_system_paths() {
+        let args = add_system_mounts_with(BwrapArgs::new(), |path| path == Path::new("/usr"));
+        let args = args.build();
+        assert!(args
+            .windows(3)
+            .any(|parts| parts == ["--ro-bind", "/usr", "/usr"]));
+        assert!(!args
+            .windows(3)
+            .any(|parts| parts == ["--ro-bind", "/bin", "/bin"]));
+    }
+
+    #[test]
+    fn bwrap_support_probe_uses_system_baseline_without_procfs() {
+        let args = create_support_probe_args();
+        assert!(args
+            .windows(3)
+            .any(|parts| parts == ["--ro-bind", "/usr", "/usr"]));
+        assert!(args.contains(&"--dev".to_string()));
+        assert!(!args.windows(2).any(|parts| parts == ["--proc", "/proc"]));
+        assert_eq!(args.last().map(String::as_str), Some("/usr/bin/true"));
+
+        let procfs_args = create_support_probe_args_with_procfs(true);
+        assert!(procfs_args
+            .windows(2)
+            .any(|parts| parts == ["--proc", "/proc"]));
+    }
+
+    #[test]
+    fn protected_parent_filter_handles_each_exclusion_and_ordinary_parent() {
+        let cwd = Path::new("/workspace/project");
+        for parent in [
+            Path::new("/"),
+            Path::new("/tmp"),
+            Path::new("/home"),
+            Path::new("/root"),
+            cwd,
+            Path::new("/workspace"),
+            Path::new("/usr"),
+            Path::new("/usr/local"),
+        ] {
+            assert!(should_skip_created_parent(parent, cwd), "{parent:?}");
+        }
+        assert!(!should_skip_created_parent(Path::new("/opt/tools"), cwd));
     }
 
     #[cfg(unix)]

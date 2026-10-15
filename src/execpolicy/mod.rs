@@ -135,9 +135,8 @@ impl PathRule {
             return false;
         };
         if self.path_pattern.ends_with("/*") {
-            let Some(prefix) = pattern.parent() else {
-                return false;
-            };
+            let mut prefix = pattern;
+            prefix.pop();
             return path.starts_with(prefix);
         }
 
@@ -1140,6 +1139,10 @@ fn path_starts_with_case_insensitive(path: &Path, base: &Path) -> bool {
     #[cfg(not(windows))]
     let case_insensitive = false;
 
+    path_starts_with_components(path, base, case_insensitive)
+}
+
+fn path_starts_with_components(path: &Path, base: &Path, case_insensitive: bool) -> bool {
     let mut path_components = path.components();
     for base_component in base.components() {
         let Some(path_component) = path_components.next() else {
@@ -1300,6 +1303,18 @@ mod tests {
         assert!(policy
             .add_prefix_rule_ext(&[], Decision::Allow, None, RuleType::Whitelist, None, false)
             .is_err());
+    }
+
+    #[test]
+    fn whitelist_mode_toggle_updates_default_decision_both_ways() {
+        let mut policy = Policy::new();
+        policy.set_whitelist_mode(true);
+        assert_eq!(policy.default_decision, Decision::Deny);
+        assert!(policy.whitelist_mode);
+
+        policy.set_whitelist_mode(false);
+        assert_eq!(policy.default_decision, Decision::Allow);
+        assert!(!policy.whitelist_mode);
     }
 
     #[test]
@@ -2970,6 +2985,35 @@ mod tests {
     }
 
     #[test]
+    fn path_prefix_comparator_covers_case_modes_mismatches_and_short_paths() {
+        assert!(path_starts_with_components(
+            Path::new("/Work/Project/file"),
+            Path::new("/work/project"),
+            true
+        ));
+        assert!(!path_starts_with_components(
+            Path::new("/Work/Project/file"),
+            Path::new("/other/project"),
+            true
+        ));
+        assert!(path_starts_with_components(
+            Path::new("/work/project/file"),
+            Path::new("/work/project"),
+            false
+        ));
+        assert!(!path_starts_with_components(
+            Path::new("/Work/Project/file"),
+            Path::new("/work/project"),
+            false
+        ));
+        assert!(!path_starts_with_components(
+            Path::new("/work"),
+            Path::new("/work/project"),
+            false
+        ));
+    }
+
+    #[test]
     fn network_rules_cover_exact_wildcard_port_and_default_decisions() {
         let mut policy = Policy::new();
         policy.add_network_rule(NetworkRule {
@@ -3036,6 +3080,12 @@ mod tests {
         });
         let rules = policy.rules_by_program.entry("tool".into()).or_default();
         rules.extend([rule.clone(), rule]);
+        rules.push(Arc::new(PathRule::new(
+            "/tmp/ignored".into(),
+            false,
+            Decision::Deny,
+            None,
+        )));
         policy
             .add_prefix_rule_ext(
                 &["tool".into(), "denied".into()],

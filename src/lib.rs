@@ -54,8 +54,8 @@ pub use sandboxing::SandboxPolicyExt;
 
 // 沙箱管理
 pub use sandboxing::{
-    get_platform_sandbox, FileSystemSandboxPolicy, NetworkSandboxPolicy, SandboxCommand,
-    SandboxExecRequest, SandboxExecutionError, SandboxManager, SandboxPolicy,
+    get_platform_sandbox, FileSystemSandboxPolicy, MxcSandboxConfig, NetworkSandboxPolicy,
+    SandboxCommand, SandboxExecRequest, SandboxExecutionError, SandboxManager, SandboxPolicy,
     SandboxTransformError, SandboxType, SandboxablePreference,
 };
 // 进程加固

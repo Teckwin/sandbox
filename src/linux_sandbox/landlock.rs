@@ -73,7 +73,11 @@ impl LandlockPathFd {
 
 /// Describe the access mask a future Landlock executor would need for reads.
 pub fn create_readonly_ruleset() -> Option<LandlockRulesetAttr> {
-    if !is_landlock_available() {
+    create_readonly_ruleset_with_availability(is_landlock_available())
+}
+
+fn create_readonly_ruleset_with_availability(available: bool) -> Option<LandlockRulesetAttr> {
+    if !available {
         return None;
     }
 
@@ -82,9 +86,15 @@ pub fn create_readonly_ruleset() -> Option<LandlockRulesetAttr> {
     })
 }
 
-/// Describe the access mask a future Landlock executor would need for writes.
 pub fn create_workspace_ruleset(writable_roots: &[PathBuf]) -> Option<LandlockRulesetAttr> {
-    if !is_landlock_available() {
+    create_workspace_ruleset_with_availability(writable_roots, is_landlock_available())
+}
+
+fn create_workspace_ruleset_with_availability(
+    writable_roots: &[PathBuf],
+    available: bool,
+) -> Option<LandlockRulesetAttr> {
+    if !available {
         return None;
     }
 
@@ -99,13 +109,13 @@ pub fn create_workspace_ruleset(writable_roots: &[PathBuf]) -> Option<LandlockRu
     })
 }
 
-/// Get the Landlock ABI version
+/// Get the Landlock ABI version.
 pub fn get_landlock_version() -> Option<u32> {
     #[cfg(target_os = "linux")]
     {
         std::fs::read_to_string("/proc/sys/kernel/landlock/version")
             .ok()
-            .and_then(|v| v.trim().parse().ok())
+            .and_then(|version| version.trim().parse().ok())
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -124,24 +134,24 @@ mod tests {
 
     #[test]
     fn ruleset_descriptions_follow_kernel_availability_and_roots() {
-        if is_landlock_available() {
-            let readonly = create_readonly_ruleset().unwrap();
-            assert_eq!(readonly.handle_access_fs, landlock_access::READ_ONLY);
+        assert!(create_readonly_ruleset_with_availability(false).is_none());
+        assert!(create_workspace_ruleset_with_availability(&[], false).is_none());
 
-            for roots in [&[][..], &[PathBuf::from("/workspace")][..]] {
-                let workspace = create_workspace_ruleset(roots).unwrap();
-                assert_eq!(
-                    workspace.handle_access_fs,
-                    if roots.is_empty() {
-                        landlock_access::READ_ONLY
-                    } else {
-                        landlock_access::READ_ONLY | landlock_access::ALL_FILE
-                    }
-                );
-            }
-        } else {
-            assert!(create_readonly_ruleset().is_none());
-            assert!(create_workspace_ruleset(&[]).is_none());
-        }
+        let readonly = create_readonly_ruleset_with_availability(true).unwrap();
+        assert_eq!(readonly.handle_access_fs, landlock_access::READ_ONLY);
+
+        let workspace_readonly = create_workspace_ruleset_with_availability(&[], true).unwrap();
+        assert_eq!(
+            workspace_readonly.handle_access_fs,
+            landlock_access::READ_ONLY
+        );
+
+        let writable =
+            create_workspace_ruleset_with_availability(&[PathBuf::from("/workspace")], true)
+                .unwrap();
+        assert_eq!(
+            writable.handle_access_fs,
+            landlock_access::READ_ONLY | landlock_access::ALL_FILE
+        );
     }
 }

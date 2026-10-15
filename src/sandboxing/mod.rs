@@ -2,7 +2,9 @@
 
 #![allow(dead_code)]
 
+pub mod mxc_config;
 pub mod seatbelt;
+pub use mxc_config::MxcSandboxConfig;
 
 #[cfg(target_os = "macos")]
 pub use seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
@@ -263,6 +265,43 @@ struct PreparedExecution {
     cwd: PathBuf,
     env: HashMap<String, String>,
     sandbox: SandboxType,
+    timeout: Option<Duration>,
+}
+
+fn remove_proc_mount(args: &mut Vec<String>) -> Result<(), SandboxTransformError> {
+    let separator = args
+        .iter()
+        .position(|argument| argument == "--")
+        .ok_or_else(|| {
+            SandboxTransformError::BubblewrapBuild(
+                "transformed command is missing the option separator".into(),
+            )
+        })?;
+    let proc_mount = args[..separator]
+        .windows(2)
+        .position(|pair| pair[0] == "--proc" && pair[1] == "/proc")
+        .ok_or_else(|| {
+            SandboxTransformError::BubblewrapBuild(
+                "transformed command is missing the procfs mount".into(),
+            )
+        })?;
+    args.drain(proc_mount..proc_mount + 2);
+    Ok(())
+}
+
+fn should_omit_proc_mount(sandbox: SandboxType, mount_procfs: bool) -> bool {
+    (sandbox == SandboxType::LinuxSeccomp) & !mount_procfs
+}
+
+fn apply_procfs_policy(
+    request: &mut SandboxExecRequest,
+    mount_procfs: bool,
+) -> Result<(), SandboxTransformError> {
+    if should_omit_proc_mount(request.sandbox, mount_procfs) {
+        remove_proc_mount(&mut request.command)?;
+        request.execution.command = request.command.clone();
+    }
+    Ok(())
 }
 
 impl SandboxExecRequest {
@@ -345,14 +384,18 @@ impl SandboxExecRequest {
 
     /// Run the transformed command and terminate it when the timeout expires.
     pub fn run(&self, timeout: Duration) -> Result<ExitStatus, SandboxExecutionError> {
-        self.run_with_spawn(timeout, |request| request.spawn())
+        self.run_with_spawn(timeout, Box::new(|request| request.spawn()))
     }
 
     fn run_with_spawn(
         &self,
         timeout: Duration,
-        spawn: impl FnOnce(&Self) -> Result<Child, SandboxExecutionError>,
+        spawn: Box<dyn FnOnce(&Self) -> Result<Child, SandboxExecutionError>>,
     ) -> Result<ExitStatus, SandboxExecutionError> {
+        let timeout = self
+            .execution
+            .timeout
+            .map_or(timeout, |configured| timeout.min(configured));
         let mut child = spawn(self)?;
         let started = Instant::now();
 
@@ -369,15 +412,21 @@ impl SandboxExecRequest {
         }
     }
 
-    /// Spawn the transformed command and wait without a timeout.
+    /// Spawn the transformed command and wait.
+    ///
+    /// Requests created from MXC config enforce its `timeout_ms`; legacy
+    /// requests without a configured timeout wait without a deadline.
     pub fn wait(&self) -> Result<ExitStatus, SandboxExecutionError> {
-        self.wait_with_spawn(|request| request.spawn())
+        self.wait_with_spawn(Box::new(|request| request.spawn()))
     }
 
     fn wait_with_spawn(
         &self,
-        spawn: impl FnOnce(&Self) -> Result<Child, SandboxExecutionError>,
+        spawn: Box<dyn FnOnce(&Self) -> Result<Child, SandboxExecutionError>>,
     ) -> Result<ExitStatus, SandboxExecutionError> {
+        if let Some(timeout) = self.execution.timeout {
+            return self.run_with_spawn(timeout, spawn);
+        }
         let mut child = spawn(self)?;
         child.wait().map_err(SandboxExecutionError::Io)
     }
@@ -445,6 +494,7 @@ impl SandboxExecRequest {
 /// Sandbox transformation error
 #[derive(Debug)]
 pub enum SandboxTransformError {
+    InvalidMxcConfig(String),
     BubblewrapUnavailable,
     BubblewrapBuild(String),
     UnprotectedExecution,
@@ -459,6 +509,7 @@ pub enum SandboxTransformError {
 impl std::fmt::Display for SandboxTransformError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidMxcConfig(reason) => write!(f, "invalid MXC sandbox config: {reason}"),
             Self::BubblewrapUnavailable => write!(f, "bubblewrap executable is unavailable"),
             Self::BubblewrapBuild(reason) => {
                 write!(f, "failed to build bubblewrap command: {reason}")
@@ -497,24 +548,71 @@ pub enum SandboxExecutionError {
     TimedOut(Duration),
 }
 
-/// Get the appropriate sandbox type for the current platform
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HostPlatform {
+    Linux,
+    Macos,
+    Windows,
+    FreeBsd,
+    OpenBsd,
+    Other,
+}
+
+fn current_host_platform() -> HostPlatform {
+    #[cfg(target_os = "linux")]
+    {
+        HostPlatform::Linux
+    }
+    #[cfg(target_os = "macos")]
+    {
+        HostPlatform::Macos
+    }
+    #[cfg(target_os = "windows")]
+    {
+        HostPlatform::Windows
+    }
+    #[cfg(target_os = "freebsd")]
+    {
+        HostPlatform::FreeBsd
+    }
+    #[cfg(target_os = "openbsd")]
+    {
+        HostPlatform::OpenBsd
+    }
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "freebsd",
+        target_os = "openbsd"
+    )))]
+    {
+        HostPlatform::Other
+    }
+}
+
+/// Get the appropriate sandbox type for the current platform.
 pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType> {
-    if cfg!(target_os = "macos") {
-        Some(SandboxType::MacosSeatbelt)
-    } else if cfg!(target_os = "linux") {
-        Some(SandboxType::LinuxSeccomp)
-    } else if cfg!(target_os = "freebsd") {
-        Some(SandboxType::FreeBSDCapsicum)
-    } else if cfg!(target_os = "openbsd") {
-        Some(SandboxType::OpenBSDPledge)
-    } else if cfg!(target_os = "windows") {
-        if windows_sandbox_enabled {
-            Some(SandboxType::WindowsRestrictedToken)
-        } else {
-            None
+    get_platform_sandbox_for(current_host_platform(), windows_sandbox_enabled)
+}
+
+fn get_platform_sandbox_for(
+    platform: HostPlatform,
+    windows_sandbox_enabled: bool,
+) -> Option<SandboxType> {
+    match platform {
+        HostPlatform::Linux => Some(SandboxType::LinuxSeccomp),
+        HostPlatform::Macos => Some(SandboxType::MacosSeatbelt),
+        HostPlatform::FreeBsd => Some(SandboxType::FreeBSDCapsicum),
+        HostPlatform::OpenBsd => Some(SandboxType::OpenBSDPledge),
+        HostPlatform::Windows => {
+            if windows_sandbox_enabled {
+                Some(SandboxType::WindowsRestrictedToken)
+            } else {
+                None
+            }
         }
-    } else {
-        None
+        HostPlatform::Other => None,
     }
 }
 
@@ -555,23 +653,46 @@ impl SandboxManager {
         command: SandboxCommand,
         policy: SandboxPolicy,
     ) -> Result<SandboxExecRequest, SandboxTransformError> {
-        // SECURITY: Validate policy before creating execution request
-        if !policy.is_safe() {
-            return Err(SandboxTransformError::UnsafePolicy(
-                "policy failed safety validation".to_string(),
-            ));
-        }
-
         let sandbox = self.select_initial(
             &FileSystemSandboxPolicy::default(),
             NetworkSandboxPolicy::default(),
             SandboxablePreference::Auto,
             cfg!(target_os = "windows"),
         );
+        self.create_exec_request_with_sandbox(command, policy, sandbox)
+    }
+
+    fn create_exec_request_with_sandbox(
+        &self,
+        command: SandboxCommand,
+        policy: SandboxPolicy,
+        sandbox: SandboxType,
+    ) -> Result<SandboxExecRequest, SandboxTransformError> {
+        if !policy.is_safe() {
+            return Err(SandboxTransformError::UnsafePolicy(
+                "policy failed safety validation".to_string(),
+            ));
+        }
         if matches!(sandbox, SandboxType::None) {
             return Err(SandboxTransformError::PlatformNotSupported);
         }
         self.transform_command(command, policy, sandbox, None)
+    }
+
+    /// Create an execution request from the MXC policy JSON subset supported
+    /// by ai-sandbox. The workload command remains a separate argv value.
+    pub fn create_exec_request_from_mxc_json(
+        &self,
+        command: SandboxCommand,
+        config_json: &str,
+    ) -> Result<SandboxExecRequest, SandboxTransformError> {
+        let config = MxcSandboxConfig::from_json(config_json)?;
+        let policy = config.sandbox_policy()?;
+        let sandbox = config.sandbox_type()?;
+        let mut request = self.transform_command(command, policy, sandbox, None)?;
+        request.execution.timeout = Some(config.timeout());
+        apply_procfs_policy(&mut request, config.filesystem.mount_procfs)?;
+        Ok(request)
     }
 
     /// Create a read-only sandbox request with explicitly mounted additional roots.
@@ -685,6 +806,7 @@ impl SandboxManager {
                 cwd,
                 env,
                 sandbox,
+                timeout: None,
             },
         })
     }
@@ -847,6 +969,28 @@ fn create_linux_sandbox_args(_policy: &SandboxPolicy, _cwd: &Path) -> Vec<String
 mod tests {
     use super::*;
 
+    fn run_if_bwrap_supported(support: Result<(), String>, test: Box<dyn FnOnce()>) {
+        match support {
+            Ok(()) => test(),
+            Err(error) => eprintln!("skipping Bubblewrap runtime test: {error}"),
+        }
+    }
+
+    #[test]
+    fn bwrap_capability_gate_covers_run_and_skip_outcomes() {
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ran_in_test = std::sync::Arc::clone(&ran);
+        run_if_bwrap_supported(
+            Ok(()),
+            Box::new(move || ran_in_test.store(true, std::sync::atomic::Ordering::Relaxed)),
+        );
+        assert!(ran.load(std::sync::atomic::Ordering::Relaxed));
+        run_if_bwrap_supported(
+            Err("unsupported test capability".into()),
+            Box::new(|| panic!("unsupported Bubblewrap test body must not run")),
+        );
+    }
+
     #[test]
     fn mutated_public_request_fields_cannot_change_spawned_command() {
         let mut env = HashMap::new();
@@ -865,6 +1009,7 @@ mod tests {
                 cwd: PathBuf::from("/"),
                 env,
                 sandbox: SandboxType::LinuxSeccomp,
+                timeout: None,
             },
         };
 
@@ -896,6 +1041,80 @@ mod tests {
         assert_eq!(request.execution.sandbox, SandboxType::LinuxSeccomp);
     }
 
+    #[test]
+    fn procfs_removal_only_changes_bubblewrap_options_before_separator() {
+        let mut args = vec![
+            "bwrap".into(),
+            "--proc".into(),
+            "/proc".into(),
+            "--".into(),
+            "/usr/bin/printf".into(),
+            "--proc".into(),
+            "/proc".into(),
+        ];
+        remove_proc_mount(&mut args).unwrap();
+        assert_eq!(args, ["bwrap", "--", "/usr/bin/printf", "--proc", "/proc"]);
+    }
+
+    #[test]
+    fn procfs_removal_fails_closed_when_bwrap_shape_is_unrecognized() {
+        assert!(matches!(
+            remove_proc_mount(&mut vec!["bwrap".into(), "--proc".into(), "/proc".into()]),
+            Err(SandboxTransformError::BubblewrapBuild(_))
+        ));
+        assert!(matches!(
+            remove_proc_mount(&mut vec!["bwrap".into(), "--".into(), "true".into()]),
+            Err(SandboxTransformError::BubblewrapBuild(_))
+        ));
+    }
+
+    #[test]
+    fn procfs_selection_omits_only_for_linux_without_explicit_mount() {
+        assert!(should_omit_proc_mount(SandboxType::LinuxSeccomp, false));
+        assert!(!should_omit_proc_mount(SandboxType::LinuxSeccomp, true));
+        assert!(!should_omit_proc_mount(SandboxType::MacosSeatbelt, false));
+    }
+
+    #[test]
+    fn procfs_request_mutation_covers_omit_mount_and_other_backend() {
+        let mut omitted = request_for_process_tests("true", SandboxType::LinuxSeccomp);
+        omitted.command = vec![
+            "bwrap".into(),
+            "--proc".into(),
+            "/proc".into(),
+            "--".into(),
+            "true".into(),
+        ];
+        omitted.execution.command = omitted.command.clone();
+        apply_procfs_policy(&mut omitted, false).unwrap();
+        assert!(!omitted
+            .command
+            .windows(2)
+            .any(|pair| pair == ["--proc", "/proc"]));
+        assert_eq!(omitted.execution.command, omitted.command);
+
+        let mut mounted = request_for_process_tests("true", SandboxType::LinuxSeccomp);
+        mounted.command = vec![
+            "bwrap".into(),
+            "--proc".into(),
+            "/proc".into(),
+            "--".into(),
+            "true".into(),
+        ];
+        mounted.execution.command = mounted.command.clone();
+        apply_procfs_policy(&mut mounted, true).unwrap();
+        assert!(mounted
+            .command
+            .windows(2)
+            .any(|pair| pair == ["--proc", "/proc"]));
+
+        let mut seatbelt = request_for_process_tests("true", SandboxType::MacosSeatbelt);
+        seatbelt.command = vec!["sandbox-exec".into(), "--".into(), "true".into()];
+        seatbelt.execution.command = seatbelt.command.clone();
+        apply_procfs_policy(&mut seatbelt, false).unwrap();
+        assert_eq!(seatbelt.command[0], "sandbox-exec");
+    }
+
     fn request_for_process_tests(program: &str, sandbox: SandboxType) -> SandboxExecRequest {
         SandboxExecRequest {
             command: vec![program.to_string()],
@@ -911,8 +1130,88 @@ mod tests {
                 cwd: std::env::current_dir().unwrap(),
                 env: HashMap::new(),
                 sandbox,
+                timeout: None,
             },
         }
+    }
+
+    fn timed_out_duration(result: Result<ExitStatus, SandboxExecutionError>) -> Option<Duration> {
+        match result {
+            Err(SandboxExecutionError::TimedOut(timeout)) => Some(timeout),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn timeout_classifier_covers_timed_out_and_other_results() {
+        let timeout = Duration::from_millis(25);
+        assert_eq!(
+            timed_out_duration(Err(SandboxExecutionError::TimedOut(timeout))),
+            Some(timeout)
+        );
+        assert_eq!(
+            timed_out_duration(Err(SandboxExecutionError::Unsupported("other".into()))),
+            None
+        );
+    }
+
+    fn sandbox_command_for_mxc_config_tests() -> SandboxCommand {
+        SandboxCommand {
+            program: OsString::from("true"),
+            args: Vec::new(),
+            cwd: std::env::current_dir().unwrap(),
+            env: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn manager_mxc_json_rejects_parse_and_unrepresentable_policy_errors() {
+        let manager = SandboxManager::new();
+        assert!(matches!(
+            manager.create_exec_request_from_mxc_json(sandbox_command_for_mxc_config_tests(), "{"),
+            Err(SandboxTransformError::InvalidMxcConfig(_))
+        ));
+        assert!(matches!(
+            manager.create_exec_request_from_mxc_json(
+                sandbox_command_for_mxc_config_tests(),
+                r#"{"filesystem":{"denied_paths":["/secret"]}}"#
+            ),
+            Err(SandboxTransformError::UnsupportedPolicy(_))
+        ));
+    }
+
+    #[test]
+    fn manager_creation_fails_closed_for_unsafe_policy_and_no_sandbox() {
+        let manager = SandboxManager::new();
+        let command = sandbox_command_for_mxc_config_tests();
+        assert!(matches!(
+            manager.create_exec_request_with_sandbox(
+                command,
+                SandboxPolicy::default(),
+                SandboxType::None
+            ),
+            Err(SandboxTransformError::PlatformNotSupported)
+        ));
+        assert!(matches!(
+            manager.create_exec_request_with_sandbox(
+                sandbox_command_for_mxc_config_tests(),
+                SandboxPolicy::DangerFullAccess,
+                SandboxType::LinuxSeccomp
+            ),
+            Err(SandboxTransformError::UnsafePolicy(_))
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn manager_mxc_json_rejects_foreign_containment_before_transform() {
+        assert!(matches!(
+            SandboxManager::new().create_exec_request_from_mxc_json(
+                sandbox_command_for_mxc_config_tests(),
+                r#"{"containment":"seatbelt"}"#
+            ),
+            Err(SandboxTransformError::UnsupportedPolicy(_))
+        ));
     }
 
     #[cfg(target_os = "linux")]
@@ -921,61 +1220,63 @@ mod tests {
         use std::io::Write;
         use std::time::{SystemTime, UNIX_EPOCH};
 
-        if let Err(error) = crate::linux_sandbox::ensure_bwrap_support() {
-            eprintln!("skipping Bubblewrap runtime test: {error}");
-            return;
-        }
-
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let workspace_parent = std::env::temp_dir().join(format!("ai-sandbox-workspace-{unique}"));
-        let toolchain_root = std::env::temp_dir().join(format!("ai-sandbox-toolchain-{unique}"));
-        std::fs::create_dir_all(&workspace_parent).unwrap();
-        std::fs::create_dir_all(&toolchain_root).unwrap();
-        struct Cleanup(Vec<PathBuf>);
-        impl Drop for Cleanup {
-            fn drop(&mut self) {
-                for path in &self.0 {
-                    let _ = std::fs::remove_dir_all(path);
+        run_if_bwrap_supported(
+            crate::linux_sandbox::ensure_bwrap_procfs_support(),
+            Box::new(|| {
+                let unique = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos();
+                let workspace_parent =
+                    std::env::temp_dir().join(format!("ai-sandbox-workspace-{unique}"));
+                let toolchain_root =
+                    std::env::temp_dir().join(format!("ai-sandbox-toolchain-{unique}"));
+                std::fs::create_dir_all(&workspace_parent).unwrap();
+                std::fs::create_dir_all(&toolchain_root).unwrap();
+                struct Cleanup(Vec<PathBuf>);
+                impl Drop for Cleanup {
+                    fn drop(&mut self) {
+                        for path in &self.0 {
+                            let _ = std::fs::remove_dir_all(path);
+                        }
+                    }
                 }
-            }
-        }
-        let _cleanup = Cleanup(vec![workspace_parent.clone(), toolchain_root.clone()]);
+                let _cleanup = Cleanup(vec![workspace_parent.clone(), toolchain_root.clone()]);
 
-        let workspace = workspace_parent.join("workspace");
-        std::fs::create_dir_all(&workspace).unwrap();
-        let toolchain_file = toolchain_root.join("runtime.txt");
-        std::fs::write(&toolchain_file, b"toolchain").unwrap();
-        let command = SandboxCommand {
-            program: "/usr/bin/cat".into(),
-            args: vec![toolchain_file.to_string_lossy().into_owned(), "-".into()],
-            cwd: workspace,
-            env: HashMap::new(),
-        };
-        let policy = SandboxPolicy::ReadOnly {
-            file_system: FileSystemSandboxPolicy::ReadOnly,
-            network_access: NetworkSandboxPolicy::NoAccess,
-        };
-        let request = SandboxManager::new()
-            .create_exec_request_with_read_only_roots(command, policy, vec![toolchain_root])
-            .unwrap();
+                let workspace = workspace_parent.join("workspace");
+                std::fs::create_dir_all(&workspace).unwrap();
+                let toolchain_file = toolchain_root.join("runtime.txt");
+                std::fs::write(&toolchain_file, b"toolchain").unwrap();
+                let command = SandboxCommand {
+                    program: "/usr/bin/cat".into(),
+                    args: vec![toolchain_file.to_string_lossy().into_owned(), "-".into()],
+                    cwd: workspace,
+                    env: HashMap::new(),
+                };
+                let policy = SandboxPolicy::ReadOnly {
+                    file_system: FileSystemSandboxPolicy::ReadOnly,
+                    network_access: NetworkSandboxPolicy::NoAccess,
+                };
+                let request = SandboxManager::new()
+                    .create_exec_request_with_read_only_roots(command, policy, vec![toolchain_root])
+                    .unwrap();
 
-        let mut child = request.spawn_with_stdio_in_process_group().unwrap();
-        let mut stdin = child.stdin.take().expect("stdin should be piped");
-        assert!(child.stdout.is_some(), "stdout should be piped");
-        assert!(child.stderr.is_some(), "stderr should be piped");
-        stdin.write_all(b"+stdin").unwrap();
-        drop(stdin);
-        let output = child.wait_with_output().unwrap();
+                let mut child = request.spawn_with_stdio_in_process_group().unwrap();
+                let mut stdin = child.stdin.take().expect("stdin should be piped");
+                assert!(child.stdout.is_some(), "stdout should be piped");
+                assert!(child.stderr.is_some(), "stderr should be piped");
+                stdin.write_all(b"+stdin").unwrap();
+                drop(stdin);
+                let output = child.wait_with_output().unwrap();
 
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert_eq!(output.stdout, b"toolchain+stdin");
+            }),
         );
-        assert_eq!(output.stdout, b"toolchain+stdin");
     }
 
     #[test]
@@ -985,6 +1286,24 @@ mod tests {
         assert!(matches!(
             empty.spawn(),
             Err(SandboxExecutionError::InvalidCommand(_))
+        ));
+        assert!(matches!(
+            empty.spawn_with_stdio(),
+            Err(SandboxExecutionError::InvalidCommand(_))
+        ));
+        assert!(matches!(
+            empty.spawn_with_stdio_in_process_group(),
+            Err(SandboxExecutionError::InvalidCommand(_))
+        ));
+
+        let valid_unprotected = request_for_process_tests("true", SandboxType::None);
+        assert!(matches!(
+            valid_unprotected.spawn_with_stdio(),
+            Err(SandboxExecutionError::Unsupported(_))
+        ));
+        assert!(matches!(
+            valid_unprotected.spawn_with_stdio_in_process_group(),
+            Err(SandboxExecutionError::Unsupported(_))
         ));
 
         let unprotected = request_for_process_tests("true", SandboxType::None);
@@ -1015,19 +1334,19 @@ mod tests {
     fn request_wait_returns_status_and_propagates_spawn_errors() {
         let request = request_for_process_tests("true", SandboxType::None);
         let status = request
-            .wait_with_spawn(|_| {
+            .wait_with_spawn(Box::new(|_| {
                 Command::new("true")
                     .spawn()
                     .map_err(SandboxExecutionError::Io)
-            })
+            }))
             .unwrap();
         assert!(status.success());
 
-        let error = request.wait_with_spawn(|_| {
+        let error = request.wait_with_spawn(Box::new(|_| {
             Err(SandboxExecutionError::Unsupported(
                 "mock spawn failure".into(),
             ))
-        });
+        }));
         assert!(matches!(error, Err(SandboxExecutionError::Unsupported(_))));
     }
 
@@ -1035,22 +1354,60 @@ mod tests {
     fn request_run_returns_early_status_and_enforces_timeout() {
         let request = request_for_process_tests("true", SandboxType::None);
         let status = request
-            .run_with_spawn(Duration::from_secs(5), |_| {
-                Command::new("true")
-                    .spawn()
-                    .map_err(SandboxExecutionError::Io)
-            })
+            .run_with_spawn(
+                Duration::from_secs(5),
+                Box::new(|_| {
+                    Command::new("true")
+                        .spawn()
+                        .map_err(SandboxExecutionError::Io)
+                }),
+            )
             .unwrap();
         assert!(status.success());
 
         let timeout = Duration::from_millis(20);
-        let result = request.run_with_spawn(timeout, |_| {
+        let result = request.run_with_spawn(
+            timeout,
+            Box::new(|_| {
+                Command::new("sleep")
+                    .arg("1")
+                    .spawn()
+                    .map_err(SandboxExecutionError::Io)
+            }),
+        );
+        assert_eq!(timed_out_duration(result), Some(timeout));
+    }
+
+    #[test]
+    fn configured_timeout_caps_a_longer_run_timeout() {
+        let configured = Duration::from_millis(20);
+        let request = request_for_process_tests("sleep", SandboxType::None);
+        let mut request = request;
+        request.execution.timeout = Some(configured);
+        let result = request.run_with_spawn(
+            Duration::from_secs(2),
+            Box::new(|_| {
+                Command::new("sleep")
+                    .arg("1")
+                    .spawn()
+                    .map_err(SandboxExecutionError::Io)
+            }),
+        );
+        assert_eq!(timed_out_duration(result), Some(configured));
+    }
+
+    #[test]
+    fn configured_timeout_also_bounds_wait() {
+        let configured = Duration::from_millis(20);
+        let mut request = request_for_process_tests("sleep", SandboxType::None);
+        request.execution.timeout = Some(configured);
+        let result = request.wait_with_spawn(Box::new(|_| {
             Command::new("sleep")
                 .arg("1")
                 .spawn()
                 .map_err(SandboxExecutionError::Io)
-        });
-        assert!(matches!(result, Err(SandboxExecutionError::TimedOut(value)) if value == timeout));
+        }));
+        assert_eq!(timed_out_duration(result), Some(configured));
     }
 
     #[test]
@@ -1081,6 +1438,7 @@ mod tests {
                 ]
                 .into(),
                 sandbox: SandboxType::None,
+                timeout: None,
             },
             ..request_for_process_tests("/bin/sh", SandboxType::None)
         };
@@ -1103,6 +1461,44 @@ mod tests {
         assert!(result.is_some());
         #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn platform_selector_covers_supported_hosts_and_windows_opt_in() {
+        for (platform, expected) in [
+            (HostPlatform::Linux, Some(SandboxType::LinuxSeccomp)),
+            (HostPlatform::Macos, Some(SandboxType::MacosSeatbelt)),
+            (HostPlatform::FreeBsd, Some(SandboxType::FreeBSDCapsicum)),
+            (HostPlatform::OpenBsd, Some(SandboxType::OpenBSDPledge)),
+            (HostPlatform::Other, None),
+        ] {
+            assert_eq!(get_platform_sandbox_for(platform, false), expected);
+        }
+        assert_eq!(get_platform_sandbox_for(HostPlatform::Windows, false), None);
+        assert_eq!(
+            get_platform_sandbox_for(HostPlatform::Windows, true),
+            Some(SandboxType::WindowsRestrictedToken)
+        );
+    }
+
+    #[test]
+    fn platform_requirement_checks_filesystem_and_network_restrictions() {
+        assert!(!should_require_platform_sandbox(
+            &FileSystemSandboxPolicy::FullAccess,
+            NetworkSandboxPolicy::FullAccess
+        ));
+        assert!(should_require_platform_sandbox(
+            &FileSystemSandboxPolicy::ReadOnly,
+            NetworkSandboxPolicy::FullAccess
+        ));
+        assert!(should_require_platform_sandbox(
+            &FileSystemSandboxPolicy::FullAccess,
+            NetworkSandboxPolicy::NoAccess
+        ));
+        assert!(should_require_platform_sandbox(
+            &FileSystemSandboxPolicy::ReadOnly,
+            NetworkSandboxPolicy::NoAccess
+        ));
     }
 
     #[test]
@@ -1166,6 +1562,44 @@ mod tests {
             network_access: NetworkSandboxPolicy::NoAccess,
         };
         assert!(read_only.is_safe());
+        assert!(!SandboxPolicy::ReadOnly {
+            file_system: FileSystemSandboxPolicy::ReadOnlyWithRoots {
+                read_only_roots: Vec::new(),
+            },
+            network_access: NetworkSandboxPolicy::NoAccess,
+        }
+        .is_safe());
+    }
+
+    #[test]
+    fn sandbox_preference_selection_covers_forbid_require_and_auto() {
+        let manager = SandboxManager::new();
+        let filesystem = FileSystemSandboxPolicy::ReadOnly;
+        let network = NetworkSandboxPolicy::NoAccess;
+        assert_eq!(
+            manager.select_initial(&filesystem, network, SandboxablePreference::Forbid, false,),
+            SandboxType::None
+        );
+        let expected =
+            get_platform_sandbox(cfg!(target_os = "windows")).unwrap_or(SandboxType::None);
+        assert_eq!(
+            manager.select_initial(
+                &filesystem,
+                network,
+                SandboxablePreference::Require,
+                cfg!(target_os = "windows"),
+            ),
+            expected
+        );
+        assert_eq!(
+            manager.select_initial(
+                &filesystem,
+                network,
+                SandboxablePreference::Auto,
+                cfg!(target_os = "windows"),
+            ),
+            expected
+        );
     }
 
     #[test]
@@ -1337,6 +1771,7 @@ mod tests {
             PathBuf::from("/toolchain")
         ])
         .is_safe());
+        assert!(!policy(Vec::new()).is_safe());
         assert!(!policy(vec![PathBuf::from("relative")]).is_safe());
         assert!(!policy(vec![PathBuf::from("/")]).is_safe());
         assert!(!policy(vec![PathBuf::from("/opt/../etc")]).is_safe());
@@ -1347,8 +1782,10 @@ mod tests {
         let directory = TestDirectory::new("root-normalization");
         let cwd = directory.0.join("workspace");
         let additional_root = directory.0.join("toolchain");
+        let nested_root = cwd.join("nested-toolchain");
         std::fs::create_dir_all(&cwd).unwrap();
         std::fs::create_dir_all(&additional_root).unwrap();
+        std::fs::create_dir_all(&nested_root).unwrap();
         let policy = |read_only_roots| SandboxPolicy::ReadOnly {
             file_system: FileSystemSandboxPolicy::ReadOnlyWithRoots { read_only_roots },
             network_access: NetworkSandboxPolicy::NoAccess,
@@ -1376,6 +1813,7 @@ mod tests {
         let (normalized, normalized_cwd) = normalize_read_only_roots(
             policy(vec![
                 cwd.clone(),
+                nested_root,
                 additional_root.clone(),
                 additional_root.clone(),
             ]),
@@ -1383,16 +1821,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(normalized_cwd, cwd.canonicalize().unwrap());
-        let SandboxPolicy::ReadOnly {
-            file_system: FileSystemSandboxPolicy::ReadOnlyWithRoots { read_only_roots },
-            ..
-        } = normalized
-        else {
-            panic!("expected normalized read-only roots");
+        let mut expected_roots = vec![
+            cwd.canonicalize().unwrap(),
+            additional_root.canonicalize().unwrap(),
+        ];
+        expected_roots.sort();
+        let expected_filesystem = FileSystemSandboxPolicy::ReadOnlyWithRoots {
+            read_only_roots: expected_roots,
         };
-        assert_eq!(read_only_roots.len(), 2);
-        assert!(read_only_roots.contains(&cwd.canonicalize().unwrap()));
-        assert!(read_only_roots.contains(&additional_root.canonicalize().unwrap()));
+        assert_eq!(
+            format!("{:?}", normalized.filesystem_policy()),
+            format!("{expected_filesystem:?}")
+        );
     }
 
     #[test]
@@ -1457,11 +1897,18 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        assert!(matches!(
-            &request.file_system_policy,
-            FileSystemSandboxPolicy::ReadOnlyWithRoots { read_only_roots }
-                if read_only_roots.iter().any(|root| root == Path::new(&toolchain))
-        ));
+        let mut expected_roots = vec![
+            workspace.0.canonicalize().unwrap(),
+            PathBuf::from(&toolchain),
+        ];
+        expected_roots.sort();
+        let expected_filesystem = FileSystemSandboxPolicy::ReadOnlyWithRoots {
+            read_only_roots: expected_roots,
+        };
+        assert_eq!(
+            format!("{:?}", request.file_system_policy),
+            format!("{expected_filesystem:?}")
+        );
         assert!(request
             .command
             .windows(3)
@@ -1943,90 +2390,93 @@ mod tests {
         use std::fs;
         use std::time::{SystemTime, UNIX_EPOCH};
 
-        if crate::linux_sandbox::ensure_bwrap_support().is_err() {
-            eprintln!("skipping Linux boundary test: Bubblewrap namespaces are unavailable");
-            return;
-        }
+        run_if_bwrap_supported(
+            crate::linux_sandbox::ensure_bwrap_procfs_support(),
+            Box::new(|| {
+                let suffix = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("system clock is before Unix epoch")
+                    .as_nanos();
+                let base = std::env::temp_dir().join(format!("ai-sandbox-boundary-{suffix}"));
+                let workspace = base.join("workspace");
+                let outside = base.join("outside");
+                fs::create_dir_all(&workspace).unwrap();
+                fs::write(&outside, "outside").unwrap();
 
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock is before Unix epoch")
-            .as_nanos();
-        let base = std::env::temp_dir().join(format!("ai-sandbox-boundary-{suffix}"));
-        let workspace = base.join("workspace");
-        let outside = base.join("outside");
-        fs::create_dir_all(&workspace).unwrap();
-        fs::write(&outside, "outside").unwrap();
-
-        let manager = SandboxManager::new();
-        let readonly = SandboxPolicy::ReadOnly {
-            file_system: FileSystemSandboxPolicy::ReadOnly,
-            network_access: NetworkSandboxPolicy::NoAccess,
-        };
-        let unreadable = manager
-            .create_exec_request(
-                SandboxCommand {
-                    program: OsString::from("/bin/sh"),
-                    args: vec!["-c".to_string(), format!("test ! -r {}", outside.display())],
-                    cwd: workspace.clone(),
-                    env: HashMap::new(),
-                },
-                readonly.clone(),
-            )
-            .unwrap();
-        assert!(unreadable.run(Duration::from_secs(2)).unwrap().success());
-
-        let blocked_write = manager
-            .create_exec_request(
-                SandboxCommand {
-                    program: OsString::from("/usr/bin/touch"),
-                    args: vec![workspace.join("blocked").display().to_string()],
-                    cwd: workspace.clone(),
-                    env: HashMap::new(),
-                },
-                readonly,
-            )
-            .unwrap();
-        assert!(!blocked_write.run(Duration::from_secs(2)).unwrap().success());
-        assert!(!workspace.join("blocked").exists());
-
-        let writable = manager
-            .create_exec_request(
-                SandboxCommand {
-                    program: OsString::from("/usr/bin/touch"),
-                    args: vec![workspace.join("allowed").display().to_string()],
-                    cwd: workspace.clone(),
-                    env: HashMap::new(),
-                },
-                SandboxPolicy::WorkspaceWrite {
-                    writable_roots: vec![workspace.clone()],
+                let manager = SandboxManager::new();
+                let readonly = SandboxPolicy::ReadOnly {
+                    file_system: FileSystemSandboxPolicy::ReadOnly,
                     network_access: NetworkSandboxPolicy::NoAccess,
-                },
-            )
-            .unwrap();
-        assert!(writable.run(Duration::from_secs(2)).unwrap().success());
-        assert!(workspace.join("allowed").exists());
+                };
+                let unreadable = manager
+                    .create_exec_request(
+                        SandboxCommand {
+                            program: OsString::from("/bin/sh"),
+                            args: vec![
+                                "-c".to_string(),
+                                format!("test ! -r {}", outside.display()),
+                            ],
+                            cwd: workspace.clone(),
+                            env: HashMap::new(),
+                        },
+                        readonly.clone(),
+                    )
+                    .unwrap();
+                assert!(unreadable.run(Duration::from_secs(2)).unwrap().success());
 
-        let literal_argument = manager
-            .create_exec_request(
-                SandboxCommand {
-                    program: OsString::from("/usr/bin/printf"),
-                    args: vec!["%s".to_string(), format!("$(touch {})", outside.display())],
-                    cwd: workspace.clone(),
-                    env: HashMap::new(),
-                },
-                SandboxPolicy::WorkspaceWrite {
-                    writable_roots: vec![workspace.clone()],
-                    network_access: NetworkSandboxPolicy::NoAccess,
-                },
-            )
-            .unwrap();
-        assert!(literal_argument
-            .run(Duration::from_secs(2))
-            .unwrap()
-            .success());
-        assert_eq!(fs::read_to_string(&outside).unwrap(), "outside");
+                let blocked_write = manager
+                    .create_exec_request(
+                        SandboxCommand {
+                            program: OsString::from("/usr/bin/touch"),
+                            args: vec![workspace.join("blocked").display().to_string()],
+                            cwd: workspace.clone(),
+                            env: HashMap::new(),
+                        },
+                        readonly,
+                    )
+                    .unwrap();
+                assert!(!blocked_write.run(Duration::from_secs(2)).unwrap().success());
+                assert!(!workspace.join("blocked").exists());
 
-        fs::remove_dir_all(base).unwrap();
+                let writable = manager
+                    .create_exec_request(
+                        SandboxCommand {
+                            program: OsString::from("/usr/bin/touch"),
+                            args: vec![workspace.join("allowed").display().to_string()],
+                            cwd: workspace.clone(),
+                            env: HashMap::new(),
+                        },
+                        SandboxPolicy::WorkspaceWrite {
+                            writable_roots: vec![workspace.clone()],
+                            network_access: NetworkSandboxPolicy::NoAccess,
+                        },
+                    )
+                    .unwrap();
+                assert!(writable.run(Duration::from_secs(2)).unwrap().success());
+                assert!(workspace.join("allowed").exists());
+
+                let literal_argument = manager
+                    .create_exec_request(
+                        SandboxCommand {
+                            program: OsString::from("/usr/bin/printf"),
+                            args: vec!["%s".to_string(), format!("$(touch {})", outside.display())],
+                            cwd: workspace.clone(),
+                            env: HashMap::new(),
+                        },
+                        SandboxPolicy::WorkspaceWrite {
+                            writable_roots: vec![workspace.clone()],
+                            network_access: NetworkSandboxPolicy::NoAccess,
+                        },
+                    )
+                    .unwrap();
+                assert!(literal_argument
+                    .run(Duration::from_secs(2))
+                    .unwrap()
+                    .success());
+                assert_eq!(fs::read_to_string(&outside).unwrap(), "outside");
+
+                fs::remove_dir_all(base).unwrap();
+            }),
+        );
     }
 }

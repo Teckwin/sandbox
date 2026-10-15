@@ -127,6 +127,52 @@ fn main() {
 cargo run --example sandbox_app
 ```
 
+### MXC Policy JSON
+
+`SandboxManager::create_exec_request_from_mxc_json` accepts the policy-only
+snake_case JSON used by `source_lsp_mxc_config`. The command stays a separate
+`SandboxCommand` argv; this is not a full MXC one-shot request and does not
+parse `process.commandLine` or shell text.
+
+```json
+{
+    "containment": "process",
+    "filesystem": {
+        "mount_procfs": false,
+        "readonly_paths": ["/opt/toolchain"],
+        "readwrite_paths": [],
+        "denied_paths": []
+    },
+    "network": {
+        "egress": {"default": "deny"},
+        "ingress": {"default": "deny", "host_loopback": "deny"}
+    },
+    "timeout_ms": 1800000
+}
+```
+
+Omitted settings default to no procfs, deny-all networking, read-only
+filesystem access, and a 30-minute execution timeout. The adapter supports
+read-only roots or writable roots separately; mixed roots, `denied_paths`,
+explicit network rules, mixed directional network actions, unknown fields, and
+unsupported containment modes fail closed. `mount_procfs` is honored by Linux
+Bubblewrap and has no effect on macOS Seatbelt.
+
+The CLI accepts the same policy JSON from a file and keeps workload argv
+separate:
+
+```sh
+sandbox-exec --mxc-config policy.json -- /usr/bin/tool --literal-arg
+```
+
+The existing `sandbox-exec readonly|workspace` syntax remains available.
+
+```rust,ignore
+let request = SandboxManager::new()
+        .create_exec_request_from_mxc_json(command, &policy_json)?;
+let status = request.run(std::time::Duration::MAX)?;
+```
+
 ## Advanced Usage
 
 ### Custom Sandbox Policy

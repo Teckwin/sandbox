@@ -41,7 +41,11 @@ pub fn find_system_bwrap_in_path() -> Option<PathBuf> {
 
 /// Get warning message about system bwrap
 pub fn system_bwrap_warning() -> Option<String> {
-    if find_system_bwrap_in_path().is_none() {
+    system_bwrap_warning_for(find_system_bwrap_in_path())
+}
+
+fn system_bwrap_warning_for(executable: Option<PathBuf>) -> Option<String> {
+    if executable.is_none() {
         Some("bubblewrap not found in PATH. Install with: apt install bubblewrap".to_string())
     } else {
         None
@@ -50,27 +54,29 @@ pub fn system_bwrap_warning() -> Option<String> {
 
 /// Verify that Bubblewrap can create the namespaces required by the executor.
 pub fn ensure_bwrap_support() -> Result<(), String> {
-    ensure_bwrap_support_with(find_system_bwrap_in_path)
+    ensure_bwrap_support_with(Box::new(find_system_bwrap_in_path))
 }
 
-fn ensure_bwrap_support_with(find: impl FnOnce() -> Option<PathBuf>) -> Result<(), String> {
+fn ensure_bwrap_support_with(find: Box<dyn FnOnce() -> Option<PathBuf>>) -> Result<(), String> {
+    ensure_bwrap_support_with_args(find, bwrap::create_support_probe_args())
+}
+
+#[cfg(test)]
+pub(crate) fn ensure_bwrap_procfs_support() -> Result<(), String> {
+    ensure_bwrap_support_with_args(
+        Box::new(find_system_bwrap_in_path),
+        bwrap::create_support_probe_args_with_procfs(true),
+    )
+}
+
+fn ensure_bwrap_support_with_args(
+    find: Box<dyn FnOnce() -> Option<PathBuf>>,
+    args: Vec<String>,
+) -> Result<(), String> {
     let executable =
         find().ok_or_else(|| "bubblewrap executable was not found in PATH".to_string())?;
     let status = Command::new(&executable)
-        .args([
-            "--unshare-user",
-            "--unshare-pid",
-            "--unshare-ipc",
-            "--ro-bind",
-            "/usr",
-            "/usr",
-            "--proc",
-            "/proc",
-            "--dev",
-            "/dev",
-            "--",
-            "/usr/bin/true",
-        ])
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -89,6 +95,14 @@ mod bwrap_support_tests {
     use std::os::unix::fs::PermissionsExt;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[test]
+    fn system_bwrap_warning_matches_injected_availability() {
+        assert!(system_bwrap_warning_for(None)
+            .unwrap()
+            .contains("not found in PATH"));
+        assert!(system_bwrap_warning_for(Some(PathBuf::from("/usr/bin/bwrap"))).is_none());
+    }
+
     fn executable_script(body: &str) -> (PathBuf, PathBuf) {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -106,20 +120,20 @@ mod bwrap_support_tests {
 
     #[test]
     fn bwrap_support_probe_covers_missing_spawn_and_exit_statuses() {
-        assert!(ensure_bwrap_support_with(|| None)
+        assert!(ensure_bwrap_support_with(Box::new(|| None))
             .unwrap_err()
             .contains("not found in PATH"));
 
         let missing = std::env::temp_dir().join("ai-sandbox-no-such-bwrap-executable");
-        assert!(ensure_bwrap_support_with(|| Some(missing))
+        assert!(ensure_bwrap_support_with(Box::new(|| Some(missing)))
             .unwrap_err()
             .contains("failed to probe bubblewrap"));
 
         let (success, success_dir) = executable_script("exit 0");
-        assert!(ensure_bwrap_support_with(|| Some(success)).is_ok());
+        assert!(ensure_bwrap_support_with(Box::new(|| Some(success))).is_ok());
 
         let (failure, failure_dir) = executable_script("exit 7");
-        assert!(ensure_bwrap_support_with(|| Some(failure))
+        assert!(ensure_bwrap_support_with(Box::new(|| Some(failure)))
             .unwrap_err()
             .contains("exited with exit status: 7"));
 
@@ -196,5 +210,62 @@ mod tests {
         .unwrap();
 
         assert!(args.contains(&"--chdir".to_string()));
+    }
+
+    #[test]
+    fn policy_argument_builder_covers_every_filesystem_policy() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("ai-sandbox-policy-map-{suffix}"));
+        let cwd = base.join("workspace");
+        let toolchain = base.join("toolchain");
+        let writable = base.join("output");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(&toolchain).unwrap();
+        std::fs::create_dir_all(&writable).unwrap();
+
+        let policies = [
+            SandboxPolicy::DangerFullAccess,
+            SandboxPolicy::ReadOnly {
+                file_system: FileSystemSandboxPolicy::ReadOnly,
+                network_access: NetworkSandboxPolicy::NoAccess,
+            },
+            SandboxPolicy::ReadOnly {
+                file_system: FileSystemSandboxPolicy::ReadOnlyWithRoots {
+                    read_only_roots: vec![toolchain],
+                },
+                network_access: NetworkSandboxPolicy::NoAccess,
+            },
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![writable],
+                network_access: NetworkSandboxPolicy::NoAccess,
+            },
+        ];
+        for policy in policies {
+            assert!(create_linux_sandbox_command_args_for_policies(
+                vec!["true".into()],
+                &cwd,
+                &policy,
+                false,
+            )
+            .is_ok());
+        }
+        assert!(matches!(
+            create_linux_sandbox_command_args_for_policies(
+                vec!["true".into()],
+                &cwd,
+                &SandboxPolicy::ExternalSandbox {
+                    network_access: NetworkSandboxPolicy::NoAccess,
+                },
+                false,
+            ),
+            Err(BwrapBuildError::UnsupportedFilesystemPolicy(_))
+        ));
+
+        std::fs::remove_dir_all(base).unwrap();
     }
 }

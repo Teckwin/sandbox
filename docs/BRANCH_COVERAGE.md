@@ -1,7 +1,8 @@
 # Branch Coverage Map
 
-The current Linux development host is not sufficient to claim cross-platform
-100% branch coverage. Use native CI runners for Windows, macOS, FreeBSD, and
+The Linux development report now has 100% branch coverage for both the library
+and all targets. This is not a claim of cross-platform branch coverage or native
+enforcement parity. Use native CI runners for Windows, macOS, FreeBSD, and
 OpenBSD paths, and keep platform-specific reports separate from the Linux
 report.
 
@@ -27,14 +28,24 @@ cargo +nightly llvm-cov report --json --output-path target/ai-sandbox-coverage.j
 
 ## Current Linux Checkpoint
 
-Measured after the current Linux coverage work:
+Measured on 2026-10-15 after MXC policy JSON support and procfs-specific probe
+coverage:
 
-- Library-only: 447/478 branch outcomes covered (93.51%).
-- All targets: 452/486 branch outcomes covered (93.00%).
-- All-target tests: 180 library tests and 4 CLI integration tests passed.
-- Bubblewrap tests cover unsupported Proxy/Localhost policies, read-only root
-  validation, workspace/system-root skips, duplicate roots and shared parents,
-  sibling roots beneath the current home directory, and non-UTF-8 mount paths.
+- Library-only: 488/488 branch outcomes covered (100%).
+- All targets: 500/500 branch outcomes covered (100%).
+- All-target tests: 211 library tests, 1 binary unit test, and 9 CLI integration
+  tests passed.
+- MXC policy JSON tests cover strict decoding, safe defaults, timeout bounds,
+  representable read-only/workspace-write policies, explicit network-rule and
+  mixed-policy rejection, host containment selection, procfs omission/mount,
+  and command-argument preservation through the CLI.
+- Bubblewrap tests use injected path/capability decisions for host-layout and
+  kernel-independent branches and cover unsupported Proxy/Localhost policies,
+  read-only root validation, workspace/system-root skips, duplicate roots and
+  shared parents, sibling roots beneath the current home directory, and
+  non-UTF-8 mount paths. Legacy runtime tests probe procfs support separately;
+  no-proc MXC JSON execution is tested independently. Native enforcement is
+  never inferred from argument-builder coverage alone.
 - Execution-policy tests cover absolute executable aliases, directory bypass
   inputs, invalid path roots, network matching, and wildcard-rule fallback.
 - Portable Seatbelt policy generation and Windows allow/deny path planning each
@@ -43,11 +54,11 @@ Measured after the current Linux coverage work:
 - OpenBSD pledge now performs the exec handoff with `execpromises` and omits the
   removed `tmppath` promise from its default policy.
 
-These are a checkpoint, not a 100% result. Coverage can change as tests or
-compiler instrumentation change; rerun the commands above before updating this
-table. The current all-target report has 34 uncovered branch outcomes, with
-several associated with platform-gated code, host filesystem layout, or
-kernel-dependent paths.
+Coverage can change with tests or compiler instrumentation; rerun the commands
+above before updating this table. The 100% result is specific to the Linux
+toolchain and source paths compiled on this host. It does not cover cfg-gated
+native code on other operating systems, nor prove that the host kernel enforces
+Bubblewrap or platform sandbox policies.
 
 ## Remaining Platform Work
 
